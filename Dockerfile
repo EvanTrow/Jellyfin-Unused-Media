@@ -29,7 +29,7 @@ FROM node:20-alpine AS runtime
 
 LABEL org.opencontainers.image.title="Jellyfin Reports" \
       org.opencontainers.image.description="Library statistics and unused media reports for Jellyfin" \
-      org.opencontainers.image.source="https://github.com/EvanTrow/Jellyfin-Unused-Media" \
+      org.opencontainers.image.source="https://github.com/EvanTrow/Jellyfin-Reports" \
       org.opencontainers.image.licenses="MIT"
 
 # Create non-root user

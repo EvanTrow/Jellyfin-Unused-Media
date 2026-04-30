@@ -1,34 +1,34 @@
 {
-  "name": "jellyfin-unused-media-client",
-  "version": "1.0.0",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@emotion/react": "^11.11.1",
-    "@emotion/styled": "^11.11.0",
-    "@mui/icons-material": "^5.15.0",
-    "@mui/material": "^5.15.0",
-    "@mui/x-date-pickers": "^6.18.4",
-    "@tanstack/react-query": "^5.100.6",
-    "@tanstack/react-virtual": "^3.13.24",
-    "axios": "^1.6.0",
-    "dayjs": "^1.11.10",
-    "jellyfin-unused-media": "file:..",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^7.14.2",
-    "react-virtualized-auto-sizer": "^2.0.3",
-    "react-window": "^1.8.11"
-  },
-  "devDependencies": {
-    "@types/react": "^18.2.45",
-    "@types/react-dom": "^18.2.18",
-    "@types/react-window": "^1.8.8",
-    "@vitejs/plugin-react": "^4.2.1",
-    "typescript": "^5.3.2",
-    "vite": "^5.0.8"
-  }
+	"name": "jellyfin-reports-client",
+	"version": "1.0.0",
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc && vite build",
+		"preview": "vite preview"
+	},
+	"dependencies": {
+		"@emotion/react": "^11.11.1",
+		"@emotion/styled": "^11.11.0",
+		"@mui/icons-material": "^5.15.0",
+		"@mui/material": "^5.15.0",
+		"@mui/x-date-pickers": "^6.18.4",
+		"@tanstack/react-query": "^5.100.6",
+		"@tanstack/react-virtual": "^3.13.24",
+		"axios": "^1.6.0",
+		"dayjs": "^1.11.10",
+		"jellyfin-reports": "file:..",
+		"react": "^18.2.0",
+		"react-dom": "^18.2.0",
+		"react-router-dom": "^7.14.2",
+		"react-virtualized-auto-sizer": "^2.0.3",
+		"react-window": "^1.8.11"
+	},
+	"devDependencies": {
+		"@types/react": "^18.2.45",
+		"@types/react-dom": "^18.2.18",
+		"@types/react-window": "^1.8.8",
+		"@vitejs/plugin-react": "^4.2.1",
+		"typescript": "^5.3.2",
+		"vite": "^5.0.8"
+	}
 }

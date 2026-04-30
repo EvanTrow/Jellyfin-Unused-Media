@@ -2,7 +2,7 @@
 
 A self-hosted web dashboard for your [Jellyfin](https://jellyfin.org) media server. Browse library statistics, identify unwatched media, and manage an exclusion list — all backed by a persistent disk cache so repeated queries are instant.
 
-[![Build & Publish Docker Image](https://github.com/EvanTrow/Jellyfin-Unused-Media/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/EvanTrow/Jellyfin-Unused-Media/actions/workflows/docker-publish.yml)
+[![Build & Publish Docker Image](https://github.com/EvanTrow/Jellyfin-Reports/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/EvanTrow/Jellyfin-Reports/actions/workflows/docker-publish.yml)
 
 ---
 
@@ -61,7 +61,7 @@ docker run -d \
   -e JELLYFIN_API_KEY=your_api_key_here \
   -v jellyfin-reports-data:/app/server/data \
   --restart unless-stopped \
-  ghcr.io/evantrow/jellyfin-unused-media:latest
+  ghcr.io/evantrow/jellyfin-reports:latest
 ```
 
 ### docker-compose.yml
@@ -69,7 +69,7 @@ docker run -d \
 ```yaml
 services:
   jellyfin-reports:
-    image: ghcr.io/evantrow/jellyfin-unused-media:latest
+    image: ghcr.io/evantrow/jellyfin-reports:latest
     container_name: jellyfin-reports
     ports:
       - "3001:3001"
