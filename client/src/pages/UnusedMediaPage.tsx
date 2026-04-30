@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box } from '@mui/material';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import QueryPanel from '../components/QueryPanel';
 import MediaTable from '../components/MediaTable';
 import { fetchUnplayedMedia, addExcluded } from '../services/api';
@@ -12,26 +13,35 @@ interface Props {
 }
 
 export default function UnusedMediaPage({ excluded, onExcluded, onSnackbar }: Props) {
-  const [queryLoading, setQueryLoading] = React.useState(false);
-  const [queryError, setQueryError] = React.useState<string | null>(null);
-  const [mediaItems, setMediaItems] = React.useState<MediaItem[]>([]);
-  const [hasQueried, setHasQueried] = React.useState(false);
+  const queryClient = useQueryClient();
+
+  // activeParams drives the query — null means "not yet run"
+  const [activeParams, setActiveParams] = React.useState<QueryParams | null>(null);
   const [showUnwatchedOnly, setShowUnwatchedOnly] = React.useState(true);
 
-  const handleQuery = async (params: QueryParams) => {
-    setQueryLoading(true);
-    setQueryError(null);
-    setHasQueried(true);
-    try {
-      const result = await fetchUnplayedMedia(params);
-      setMediaItems(result.items);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Query failed';
-      const axiosError = err as { response?: { data?: { error?: string } } };
-      setQueryError(axiosError?.response?.data?.error || message);
-      setMediaItems([]);
-    } finally {
-      setQueryLoading(false);
+  const queryKey = ['media', activeParams] as const;
+
+  const {
+    data,
+    isFetching,
+    error: queryError,
+    refetch,
+  } = useQuery({
+    queryKey,
+    queryFn: () => fetchUnplayedMedia(activeParams!),
+    enabled: activeParams !== null,
+  });
+
+  const mediaItems = data?.items ?? [];
+  const hasQueried = activeParams !== null;
+
+  const handleQuery = (params: QueryParams) => {
+    if (activeParams && JSON.stringify(activeParams) === JSON.stringify(params)) {
+      // Same params — force refetch (invalidate cache for this key)
+      queryClient.invalidateQueries({ queryKey });
+      refetch();
+    } else {
+      setActiveParams(params);
     }
   };
 
@@ -39,7 +49,10 @@ export default function UnusedMediaPage({ excluded, onExcluded, onSnackbar }: Pr
     try {
       const newExcluded = await addExcluded(item);
       onExcluded(newExcluded);
-      setMediaItems((prev) => prev.filter((m) => m.id !== item.id));
+      // Remove item from cached data without refetching
+      queryClient.setQueryData(queryKey, (old: typeof data) =>
+        old ? { ...old, items: old.items.filter((m) => m.id !== item.id) } : old
+      );
       onSnackbar(`"${item.name}" added to exclude list`);
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { error?: string } } };
@@ -47,30 +60,31 @@ export default function UnusedMediaPage({ excluded, onExcluded, onSnackbar }: Pr
     }
   };
 
-  // Filter out items that are in the exclude list
-  const visibleItems = React.useMemo(
-    () => {
-      const excludedIds = new Set(excluded.map((e) => e.id));
-      const filtered = mediaItems.filter((i) => !excludedIds.has(i.id));
-      return showUnwatchedOnly ? filtered.filter((i) => !i.watched) : filtered;
-    },
-    [mediaItems, excluded, showUnwatchedOnly]
-  );
+  const visibleItems = React.useMemo(() => {
+    const excludedIds = new Set(excluded.map((e) => e.id));
+    const filtered = mediaItems.filter((i) => !excludedIds.has(i.id));
+    return showUnwatchedOnly ? filtered.filter((i) => !i.watched) : filtered;
+  }, [mediaItems, excluded, showUnwatchedOnly]);
+
+  const errorMsg = queryError
+    ? ((queryError as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+        (queryError instanceof Error ? queryError.message : 'Query failed'))
+    : null;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       <QueryPanel
         onQuery={handleQuery}
-        loading={queryLoading}
+        loading={isFetching}
         resultCount={hasQueried ? visibleItems.length : undefined}
         totalCount={hasQueried ? mediaItems.length : undefined}
         showUnwatchedOnly={showUnwatchedOnly}
         onShowUnwatchedOnlyChange={setShowUnwatchedOnly}
-        error={queryError}
+        error={errorMsg}
       />
       <MediaTable
         items={visibleItems}
-        loading={queryLoading}
+        loading={isFetching}
         onExclude={handleExclude}
       />
     </Box>

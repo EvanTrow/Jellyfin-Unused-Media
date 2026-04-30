@@ -40,3 +40,7 @@ export async function removeExcluded(id: string): Promise<void> {
 export async function clearExcluded(): Promise<void> {
   await api.delete('/excluded');
 }
+
+export async function clearServerCache(): Promise<void> {
+  await api.delete('/cache');
+}

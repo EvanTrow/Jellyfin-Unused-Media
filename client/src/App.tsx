@@ -26,15 +26,18 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import MovieFilterIcon from '@mui/icons-material/MovieFilter';
 import BlockIcon from '@mui/icons-material/Block';
 import AssessmentIcon from '@mui/icons-material/Assessment';
+import SettingsIcon from '@mui/icons-material/Settings';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 
 import { lightTheme, darkTheme } from './theme';
 import DashboardPage from './pages/DashboardPage';
 import UnusedMediaPage from './pages/UnusedMediaPage';
+import SettingsPage from './pages/SettingsPage';
 import ExcludeManager from './components/ExcludeManager';
 import { fetchExcluded, removeExcluded, clearExcluded } from './services/api';
 import { ExcludedItem, Page } from './types';
+import { SettingsProvider } from './context/SettingsContext';
 
 const DRAWER_WIDTH = 240;
 
@@ -139,10 +142,25 @@ export default function App() {
           </ListItemButton>
         ))}
       </List>
+
+      {/* Push settings to the bottom */}
+      <Box sx={{ flexGrow: 1 }} />
+      <Divider />
+      <List dense disablePadding sx={{ pb: 1 }}>
+        <ListItemButton
+          selected={page === 'settings'}
+          onClick={() => setPage('settings')}
+          sx={{ borderRadius: 1, mx: 1, mt: 0.5 }}
+        >
+          <ListItemIcon sx={{ minWidth: 36 }}><SettingsIcon /></ListItemIcon>
+          <ListItemText primary="Settings" />
+        </ListItemButton>
+      </List>
     </Box>
   );
 
   return (
+    <SettingsProvider>
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <LocalizationProvider dateAdapter={AdapterDayjs}>
@@ -216,6 +234,9 @@ export default function App() {
                   onClearAll={handleClearExcluded}
                 />
               )}
+              {page === 'settings' && (
+                <SettingsPage onSnackbar={showSnackbar} />
+              )}
             </Container>
           </Box>
         </Box>
@@ -238,5 +259,6 @@ export default function App() {
         </Snackbar>
       </LocalizationProvider>
     </ThemeProvider>
+    </SettingsProvider>
   );
 }

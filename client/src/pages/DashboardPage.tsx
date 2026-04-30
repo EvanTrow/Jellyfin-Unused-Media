@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   Box,
   Card,
@@ -15,8 +14,9 @@ import MovieIcon from '@mui/icons-material/Movie';
 import TvIcon from '@mui/icons-material/Tv';
 import LibraryBooksIcon from '@mui/icons-material/LibraryBooks';
 import VideoLibraryIcon from '@mui/icons-material/VideoLibrary';
+import { useQuery } from '@tanstack/react-query';
 import { fetchDashboardStats } from '../services/api';
-import { DashboardStats, LibraryStats } from '../types';
+import { LibraryStats } from '../types';
 
 function collectionIcon(type: string) {
   const t = type.toLowerCase();
@@ -103,21 +103,12 @@ function LibraryCard({ lib }: { lib: LibraryStats }) {
 }
 
 export default function DashboardPage() {
-  const [stats, setStats] = React.useState<DashboardStats | null>(null);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
+  const { data: stats, isLoading, error } = useQuery({
+    queryKey: ['dashboard'],
+    queryFn: fetchDashboardStats,
+  });
 
-  React.useEffect(() => {
-    fetchDashboardStats()
-      .then(setStats)
-      .catch((err: unknown) => {
-        const axiosErr = err as { response?: { data?: { error?: string } } };
-        setError(axiosErr?.response?.data?.error ?? (err instanceof Error ? err.message : 'Failed to load'));
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) {
+  if (isLoading) {
     return (
       <Box>
         <Typography variant="h5" fontWeight={700} gutterBottom>
@@ -135,7 +126,9 @@ export default function DashboardPage() {
   }
 
   if (error) {
-    return <Alert severity="error">{error}</Alert>;
+    const axiosErr = error as { response?: { data?: { error?: string } } };
+    const msg = axiosErr?.response?.data?.error ?? (error instanceof Error ? error.message : 'Failed to load');
+    return <Alert severity="error">{msg}</Alert>;
   }
 
   if (!stats) return null;

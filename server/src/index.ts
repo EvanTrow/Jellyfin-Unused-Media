@@ -5,6 +5,7 @@ import path from 'path';
 import mediaRoutes from './routes/media';
 import excludedRoutes from './routes/excluded';
 import dashboardRoutes from './routes/dashboard';
+import cacheRoutes from './routes/cache';
 
 dotenv.config();
 
@@ -17,6 +18,7 @@ app.use(express.json());
 app.use('/api/media', mediaRoutes);
 app.use('/api/excluded', excludedRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/cache', cacheRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {

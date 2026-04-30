@@ -55,4 +55,4 @@ episodes: number;
 
 export type SortDirection = 'asc' | 'desc';
 export type SortField = 'name' | 'type' | 'dateAdded' | 'year' | 'watched' | 'requestedBy' | 'lastWatchedBy' | 'lastWatchedDate';
-export type Page = 'dashboard' | 'unused-media' | 'excluded';
+export type Page = 'dashboard' | 'unused-media' | 'excluded' | 'settings';
