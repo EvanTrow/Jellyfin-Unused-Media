@@ -13,6 +13,7 @@
     "@mui/material": "^5.15.0",
     "@mui/x-date-pickers": "^6.18.4",
     "@tanstack/react-query": "^5.100.6",
+    "@tanstack/react-virtual": "^3.13.24",
     "axios": "^1.6.0",
     "dayjs": "^1.11.10",
     "jellyfin-unused-media": "file:..",

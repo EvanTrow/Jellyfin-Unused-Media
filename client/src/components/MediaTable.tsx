@@ -11,14 +11,14 @@ import {
 	TextField,
 	InputAdornment,
 	Stack,
+	Collapse,
 	Skeleton,
 	Card,
 	CardContent,
 	useTheme,
 	useMediaQuery,
 } from '@mui/material';
-import { VariableSizeList, ListChildComponentProps } from 'react-window';
-import { AutoSizer } from 'react-virtualized-auto-sizer';
+import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import BlockIcon from '@mui/icons-material/Block';
 import SearchIcon from '@mui/icons-material/Search';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -31,35 +31,25 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import { MediaItem, SortDirection, SortField } from '../types';
 
-// ─── Row / card height constants ────────────────────────────────────────────
-const DESKTOP_ROW_H = 72;       // height of one (collapsed) desktop row
-const DESKTOP_HEADER_H = 48;    // height of the sticky header bar
-const DESKTOP_EXPANDED = 120;   // extra height when the overview is shown
-
-const MOBILE_CARD_H = 128;      // height of one collapsed mobile card
-const MOBILE_EXPANDED = 130;    // extra height when the details are shown
-
-// Approximate px occupied by chrome above each virtual list.
-// Adjust if the page layout changes significantly.
-const DESKTOP_LIST_OFFSET = 428;
-const MOBILE_LIST_OFFSET  = 460;
-const MIN_LIST_H = 300;
+const DESKTOP_HEADER_H = 48;
+const DESKTOP_ROW_H = 72; // estimated height for collapsed desktop row
+const MOBILE_CARD_H = 128; // estimated height for collapsed mobile card
 
 // ─── Desktop column widths (px) ──────────────────────────────────────────────
 // The "title" column is flex:1 and takes whatever remains.
 const C = {
-	expand:          40,
-	poster:          56,
+	expand: 40,
+	poster: 56,
 	// title: flex 1 (min 140 px)
-	type:           100,
-	year:            55,
-	dateAdded:      105,
-	runtime:         68,
-	status:         105,
-	requestedBy:    120,
-	lastWatchedBy:  120,
-	lastWatchedDate:105,
-	actions:         52,
+	type: 100,
+	year: 55,
+	dateAdded: 105,
+	runtime: 68,
+	status: 115,
+	requestedBy: 150,
+	lastWatchedBy: 150,
+	lastWatchedDate: 105,
+	actions: 52,
 } as const;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -93,31 +83,20 @@ function descendingComparator(a: MediaItem, b: MediaItem, orderBy: SortField): n
 	if (aVal == null) return 1;
 	if (bVal == null) return -1;
 	if (typeof aVal === 'boolean' && typeof bVal === 'boolean') return (bVal ? 1 : 0) - (aVal ? 1 : 0);
-	if (typeof aVal === 'string'  && typeof bVal === 'string')  return bVal.localeCompare(aVal);
-	if (typeof aVal === 'number'  && typeof bVal === 'number')  return bVal - aVal;
+	if (typeof aVal === 'string' && typeof bVal === 'string') return bVal.localeCompare(aVal);
+	if (typeof aVal === 'number' && typeof bVal === 'number') return bVal - aVal;
 	return 0;
 }
 
 function getComparator(order: SortDirection, orderBy: SortField) {
-	return order === 'desc'
-		? (a: MediaItem, b: MediaItem) =>  descendingComparator(a, b, orderBy)
-		: (a: MediaItem, b: MediaItem) => -descendingComparator(a, b, orderBy);
+	return order === 'desc' ? (a: MediaItem, b: MediaItem) => descendingComparator(a, b, orderBy) : (a: MediaItem, b: MediaItem) => -descendingComparator(a, b, orderBy);
 }
 
 // ─── Desktop: sortable column label ──────────────────────────────────────────
 
-function SortLabel({ id, label, orderBy, order, onSort }: {
-	id: SortField; label: string;
-	orderBy: SortField; order: SortDirection;
-	onSort: (f: SortField) => void;
-}) {
+function SortLabel({ id, label, orderBy, order, onSort }: { id: SortField; label: string; orderBy: SortField; order: SortDirection; onSort: (f: SortField) => void }) {
 	return (
-		<TableSortLabel
-			active={orderBy === id}
-			direction={orderBy === id ? order : 'asc'}
-			onClick={() => onSort(id)}
-			sx={{ fontSize: '0.75rem', fontWeight: 600 }}
-		>
+		<TableSortLabel active={orderBy === id} direction={orderBy === id ? order : 'asc'} onClick={() => onSort(id)} sx={{ fontSize: '0.75rem', fontWeight: 600 }}>
 			{label}
 		</TableSortLabel>
 	);
@@ -125,9 +104,7 @@ function SortLabel({ id, label, orderBy, order, onSort }: {
 
 // ─── Desktop: sticky header row ───────────────────────────────────────────────
 
-function DesktopHeader({ orderBy, order, onSort }: {
-	orderBy: SortField; order: SortDirection; onSort: (f: SortField) => void;
-}) {
+function DesktopHeader({ orderBy, order, onSort }: { orderBy: SortField; order: SortDirection; onSort: (f: SortField) => void }) {
 	const sp = { orderBy, order, onSort };
 	return (
 		<Box
@@ -178,20 +155,18 @@ function DesktopHeader({ orderBy, order, onSort }: {
 	);
 }
 
-// ─── Desktop: virtualized row ─────────────────────────────────────────────────
+// ─── Desktop: row ─────────────────────────────────────────────────────────────
 
 interface DesktopRowProps {
 	item: MediaItem;
-	style: React.CSSProperties;
 	open: boolean;
 	onToggle: () => void;
 	onExclude: (item: MediaItem) => void;
 }
 
-const DesktopRow = React.memo(function DesktopRow({ item, style, open, onToggle, onExclude }: DesktopRowProps) {
+const DesktopRow = React.memo(function DesktopRow({ item, open, onToggle, onExclude }: DesktopRowProps) {
 	return (
 		<Box
-			style={style}
 			role='row'
 			sx={{
 				display: 'flex',
@@ -202,10 +177,7 @@ const DesktopRow = React.memo(function DesktopRow({ item, style, open, onToggle,
 			}}
 		>
 			{/* Main content */}
-			<Box
-				className='dr-main'
-				sx={{ display: 'flex', alignItems: 'center', height: DESKTOP_ROW_H, flexShrink: 0 }}
-			>
+			<Box className='dr-main' sx={{ display: 'flex', alignItems: 'center', height: DESKTOP_ROW_H, flexShrink: 0 }}>
 				{/* Expand */}
 				<Box sx={{ width: C.expand, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
 					{item.overview && (
@@ -217,11 +189,7 @@ const DesktopRow = React.memo(function DesktopRow({ item, style, open, onToggle,
 
 				{/* Poster */}
 				<Box sx={{ width: C.poster, flexShrink: 0, px: 1 }}>
-					<Avatar
-						src={item.imageUrl ?? undefined}
-						variant='rounded'
-						sx={{ width: 36, height: 50, bgcolor: 'action.selected' }}
-					>
+					<Avatar src={item.imageUrl ?? undefined} variant='rounded' sx={{ width: 36, height: 50, bgcolor: 'action.selected' }}>
 						{item.type === 'Movie' ? <MovieIcon fontSize='small' /> : <TvIcon fontSize='small' />}
 					</Avatar>
 				</Box>
@@ -281,7 +249,9 @@ const DesktopRow = React.memo(function DesktopRow({ item, style, open, onToggle,
 					{item.requestedBy ? (
 						<Chip icon={<AddCircleOutlineIcon />} label={item.requestedBy} size='small' color='info' variant='outlined' sx={{ fontSize: '0.7rem', height: 22, maxWidth: '100%' }} />
 					) : (
-						<Typography variant='caption' color='text.disabled'>—</Typography>
+						<Typography variant='caption' color='text.disabled'>
+							—
+						</Typography>
 					)}
 				</Box>
 
@@ -290,7 +260,9 @@ const DesktopRow = React.memo(function DesktopRow({ item, style, open, onToggle,
 					{item.lastWatchedBy ? (
 						<Chip icon={<PersonIcon />} label={item.lastWatchedBy} size='small' variant='outlined' sx={{ fontSize: '0.7rem', height: 22, maxWidth: '100%' }} />
 					) : (
-						<Typography variant='caption' color='text.disabled'>Never</Typography>
+						<Typography variant='caption' color='text.disabled'>
+							Never
+						</Typography>
 					)}
 				</Box>
 
@@ -299,14 +271,23 @@ const DesktopRow = React.memo(function DesktopRow({ item, style, open, onToggle,
 					{item.lastWatchedDate ? (
 						<Typography variant='body2'>{formatDate(item.lastWatchedDate)}</Typography>
 					) : (
-						<Typography variant='caption' color='text.disabled'>Never</Typography>
+						<Typography variant='caption' color='text.disabled'>
+							Never
+						</Typography>
 					)}
 				</Box>
 
 				{/* Actions */}
 				<Box sx={{ width: C.actions, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
 					<Tooltip title='Add to exclude list'>
-						<IconButton size='small' color='error' onClick={(e) => { e.stopPropagation(); onExclude(item); }}>
+						<IconButton
+							size='small'
+							color='error'
+							onClick={(e) => {
+								e.stopPropagation();
+								onExclude(item);
+							}}
+						>
 							<BlockIcon fontSize='small' />
 						</IconButton>
 					</Tooltip>
@@ -314,62 +295,46 @@ const DesktopRow = React.memo(function DesktopRow({ item, style, open, onToggle,
 			</Box>
 
 			{/* Expanded overview */}
-			{open && item.overview && (
-				<Box
-					sx={{
-						flex: 1,
-						px: 2,
-						py: 1.5,
-						bgcolor: 'action.hover',
-						overflow: 'hidden',
-						borderTop: 1,
-						borderColor: 'divider',
-					}}
-				>
-					<Typography
-						variant='body2'
-						color='text.secondary'
+			<Collapse in={open} unmountOnExit>
+				{item.overview && (
+					<Box
 						sx={{
-							overflow: 'hidden',
-							display: '-webkit-box',
-							WebkitBoxOrient: 'vertical',
-							WebkitLineClamp: 4,
+							px: 2,
+							py: 1.5,
+							bgcolor: 'action.hover',
+							borderTop: 1,
+							borderColor: 'divider',
 						}}
 					>
-						{item.overview}
-					</Typography>
-				</Box>
-			)}
+						<Typography variant='body2' color='text.secondary'>
+							{item.overview}
+						</Typography>
+					</Box>
+				)}
+			</Collapse>
 		</Box>
 	);
 });
 
-// ─── Mobile: virtualized card ─────────────────────────────────────────────────
+// ─── Mobile: card ─────────────────────────────────────────────────────────────
 
 interface MobileCardProps {
 	item: MediaItem;
-	style: React.CSSProperties;
 	open: boolean;
 	onToggle: () => void;
 	onExclude: (item: MediaItem) => void;
 }
 
-const MobileMediaCard = React.memo(function MobileMediaCard({ item, style, open, onToggle, onExclude }: MobileCardProps) {
-	const hasDetails =
-		!!item.overview || item.genres.length > 0 || !!item.dateAdded ||
-		item.runtimeMinutes != null || !!item.lastWatchedDate;
+const MobileMediaCard = React.memo(function MobileMediaCard({ item, open, onToggle, onExclude }: MobileCardProps) {
+	const hasDetails = !!item.overview || item.genres.length > 0 || !!item.dateAdded || item.runtimeMinutes != null || !!item.lastWatchedDate;
 
 	return (
-		<Box style={style} sx={{ px: 0, pb: '1px' }}>
-			<Card variant='outlined' sx={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-				<CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 }, flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+		<Box sx={{ px: 0, pb: 1 }}>
+			<Card variant='outlined'>
+				<CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
 					<Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}>
 						{/* Poster */}
-						<Avatar
-							src={item.imageUrl ?? undefined}
-							variant='rounded'
-							sx={{ width: 44, height: 60, flexShrink: 0, bgcolor: 'action.selected' }}
-						>
+						<Avatar src={item.imageUrl ?? undefined} variant='rounded' sx={{ width: 44, height: 60, flexShrink: 0, bgcolor: 'action.selected' }}>
 							{item.type === 'Movie' ? <MovieIcon fontSize='small' /> : <TvIcon fontSize='small' />}
 						</Avatar>
 
@@ -393,7 +358,9 @@ const MobileMediaCard = React.memo(function MobileMediaCard({ item, style, open,
 								) : (
 									<Chip icon={<RadioButtonUncheckedIcon />} label='Unwatched' size='small' variant='outlined' sx={{ height: 20, fontSize: '0.7rem' }} />
 								)}
-								{item.requestedBy && <Chip icon={<AddCircleOutlineIcon />} label={item.requestedBy} size='small' color='info' variant='outlined' sx={{ height: 20, fontSize: '0.7rem' }} />}
+								{item.requestedBy && (
+									<Chip icon={<AddCircleOutlineIcon />} label={item.requestedBy} size='small' color='info' variant='outlined' sx={{ height: 20, fontSize: '0.7rem' }} />
+								)}
 								{item.lastWatchedBy && <Chip icon={<PersonIcon />} label={item.lastWatchedBy} size='small' variant='outlined' sx={{ height: 20, fontSize: '0.7rem' }} />}
 							</Stack>
 						</Box>
@@ -413,21 +380,11 @@ const MobileMediaCard = React.memo(function MobileMediaCard({ item, style, open,
 						</Stack>
 					</Box>
 
-					{/* Expanded details (no animation — height is managed by react-window) */}
-					{open && (
-						<Box sx={{ mt: 1, pt: 1, borderTop: 1, borderColor: 'divider', overflow: 'hidden' }}>
+					{/* Expanded details */}
+					<Collapse in={open} unmountOnExit>
+						<Box sx={{ mt: 1, pt: 1, borderTop: 1, borderColor: 'divider' }}>
 							{item.overview && (
-								<Typography
-									variant='caption'
-									color='text.secondary'
-									sx={{
-										display: '-webkit-box',
-										overflow: 'hidden',
-										WebkitBoxOrient: 'vertical',
-										WebkitLineClamp: 4,
-										mb: 0.5,
-									}}
-								>
+								<Typography variant='caption' color='text.secondary' sx={{ display: 'block', mb: 0.5 }}>
 									{item.overview}
 								</Typography>
 							)}
@@ -456,12 +413,122 @@ const MobileMediaCard = React.memo(function MobileMediaCard({ item, style, open,
 								</Stack>
 							)}
 						</Box>
-					)}
+					</Collapse>
 				</CardContent>
 			</Card>
 		</Box>
 	);
 });
+
+// ─── Desktop windowed list ────────────────────────────────────────────────────
+
+interface DesktopVirtualListProps {
+	items: MediaItem[];
+	openRows: Set<string>;
+	onToggle: (id: string) => void;
+	onExclude: (item: MediaItem) => void;
+	orderBy: SortField;
+	order: SortDirection;
+	onSort: (f: SortField) => void;
+}
+
+function DesktopVirtualList({ items, openRows, onToggle, onExclude, orderBy, order, onSort }: DesktopVirtualListProps) {
+	const parentRef = React.useRef<HTMLDivElement>(null);
+
+	// scrollMargin must be set after mount — parentRef.current is null during the first render.
+	const [scrollMargin, setScrollMargin] = React.useState(0);
+	React.useLayoutEffect(() => {
+		if (parentRef.current) {
+			setScrollMargin(parentRef.current.getBoundingClientRect().top + window.scrollY);
+		}
+	}, []);
+
+	const virtualizer = useWindowVirtualizer({
+		count: items.length,
+		estimateSize: () => DESKTOP_ROW_H,
+		overscan: 6,
+		scrollMargin,
+	});
+
+	return (
+		<Box sx={{ overflowX: 'auto' }}>
+			<Paper variant='outlined' sx={{ minWidth: 1050 }}>
+				{/* Sticky header — sticks just below the AppBar */}
+				<Box>
+					<DesktopHeader orderBy={orderBy} order={order} onSort={onSort} />
+				</Box>
+
+				{/* Virtualised rows container — height = total virtual height */}
+				<div ref={parentRef} style={{ position: 'relative', height: virtualizer.getTotalSize() }}>
+					{virtualizer.getVirtualItems().map((vItem) => (
+						<div
+							key={vItem.key}
+							data-index={vItem.index}
+							ref={virtualizer.measureElement}
+							style={{
+								position: 'absolute',
+								top: 0,
+								left: 0,
+								width: '100%',
+								transform: `translateY(${vItem.start - virtualizer.options.scrollMargin}px)`,
+							}}
+						>
+							<DesktopRow item={items[vItem.index]} open={openRows.has(items[vItem.index].id)} onToggle={() => onToggle(items[vItem.index].id)} onExclude={onExclude} />
+						</div>
+					))}
+				</div>
+			</Paper>
+		</Box>
+	);
+}
+
+// ─── Mobile windowed list ─────────────────────────────────────────────────────
+
+interface MobileVirtualListProps {
+	items: MediaItem[];
+	openRows: Set<string>;
+	onToggle: (id: string) => void;
+	onExclude: (item: MediaItem) => void;
+}
+
+function MobileVirtualList({ items, openRows, onToggle, onExclude }: MobileVirtualListProps) {
+	const parentRef = React.useRef<HTMLDivElement>(null);
+
+	const [scrollMargin, setScrollMargin] = React.useState(0);
+	React.useLayoutEffect(() => {
+		if (parentRef.current) {
+			setScrollMargin(parentRef.current.getBoundingClientRect().top + window.scrollY);
+		}
+	}, []);
+
+	const virtualizer = useWindowVirtualizer({
+		count: items.length,
+		estimateSize: () => MOBILE_CARD_H,
+		overscan: 4,
+		scrollMargin,
+	});
+
+	return (
+		<div ref={parentRef} style={{ position: 'relative', height: virtualizer.getTotalSize() }}>
+			{virtualizer.getVirtualItems().map((vItem) => (
+				<div
+					key={vItem.key}
+					data-index={vItem.index}
+					ref={virtualizer.measureElement}
+					style={{
+						position: 'absolute',
+						top: 0,
+						left: 0,
+						width: '100%',
+						transform: `translateY(${vItem.start - virtualizer.options.scrollMargin}px)`,
+					}}
+				>
+					<MobileMediaCard item={items[vItem.index]} open={openRows.has(items[vItem.index].id)} onToggle={() => onToggle(items[vItem.index].id)} onExclude={onExclude} />
+				</div>
+			))}
+		</div>
+	);
+}
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
@@ -469,15 +536,11 @@ export default function MediaTable({ items, loading, onExclude }: Props) {
 	const theme = useTheme();
 	const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
-	const [order,   setOrder]   = React.useState<SortDirection>('asc');
-	const [orderBy, setOrderBy] = React.useState<SortField>('name');
-	const [search,  setSearch]  = React.useState('');
+	const [order, setOrder] = React.useState<SortDirection>('desc');
+	const [orderBy, setOrderBy] = React.useState<SortField>('dateAdded');
+	const [search, setSearch] = React.useState('');
 
-	// Set of item IDs whose overview is currently expanded
 	const [openRows, setOpenRows] = React.useState<Set<string>>(new Set());
-
-	const desktopListRef = React.useRef<VariableSizeList>(null);
-	const mobileListRef  = React.useRef<VariableSizeList>(null);
 
 	const handleSort = (field: SortField) => {
 		setOrder(orderBy === field && order === 'asc' ? 'desc' : 'asc');
@@ -492,51 +555,24 @@ export default function MediaTable({ items, loading, onExclude }: Props) {
 					!q ||
 					item.name.toLowerCase().includes(q) ||
 					item.genres.some((g) => g.toLowerCase().includes(q)) ||
-					(item.requestedBy  ?? '').toLowerCase().includes(q) ||
+					(item.requestedBy ?? '').toLowerCase().includes(q) ||
 					(item.lastWatchedBy ?? '').toLowerCase().includes(q),
 			)
 			.sort(getComparator(order, orderBy));
 	}, [items, search, order, orderBy]);
 
-	// When the underlying data changes, collapse all expanded rows
 	React.useEffect(() => {
 		setOpenRows(new Set());
 	}, [items]);
 
-	// After every render, sync react-window's size cache with the current openRows
-	// so expanded rows get the correct allocated height.
-	React.useLayoutEffect(() => {
-		desktopListRef.current?.resetAfterIndex(0);
-		mobileListRef.current?.resetAfterIndex(0);
-	}, [filtered, openRows]);
-
 	const toggleRow = (id: string) => {
 		setOpenRows((prev) => {
 			const next = new Set(prev);
-			if (next.has(id)) next.delete(id); else next.add(id);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
 			return next;
 		});
 	};
-
-	const getDesktopItemSize = React.useCallback(
-		(index: number) => {
-			const item = filtered[index];
-			return item && openRows.has(item.id)
-				? DESKTOP_ROW_H + DESKTOP_EXPANDED
-				: DESKTOP_ROW_H;
-		},
-		[filtered, openRows],
-	);
-
-	const getMobileItemSize = React.useCallback(
-		(index: number) => {
-			const item = filtered[index];
-			return item && openRows.has(item.id)
-				? MOBILE_CARD_H + MOBILE_EXPANDED
-				: MOBILE_CARD_H;
-		},
-		[filtered, openRows],
-	);
 
 	if (loading) {
 		return (
@@ -576,69 +612,9 @@ export default function MediaTable({ items, loading, onExclude }: Props) {
 			</Box>
 
 			{isMobile ? (
-				/* ── Mobile virtualized card list ── */
-				<Box sx={{ height: `calc(100vh - ${MOBILE_LIST_OFFSET}px)`, minHeight: MIN_LIST_H }}>
-					<AutoSizer
-						renderProp={({ height, width }) =>
-							height == null || width == null ? null : (
-								<VariableSizeList
-									ref={mobileListRef}
-									height={height}
-									width={width}
-									itemCount={filtered.length}
-									itemSize={getMobileItemSize}
-									overscanCount={4}
-								>
-									{({ index, style }: ListChildComponentProps) => (
-										<MobileMediaCard
-											item={filtered[index]}
-											style={style}
-											open={openRows.has(filtered[index].id)}
-											onToggle={() => toggleRow(filtered[index].id)}
-											onExclude={onExclude}
-										/>
-									)}
-								</VariableSizeList>
-							)
-						}
-					/>
-				</Box>
+				<MobileVirtualList items={filtered} openRows={openRows} onToggle={toggleRow} onExclude={onExclude} />
 			) : (
-				/* ── Desktop virtualized flex-table ── */
-				<Box sx={{ overflowX: 'auto' }}>
-					<Paper variant='outlined' sx={{ minWidth: 1050 }}>
-						{/* Sticky header */}
-						<DesktopHeader orderBy={orderBy} order={order} onSort={handleSort} />
-
-						{/* Virtualized body */}
-						<Box sx={{ height: `calc(100vh - ${DESKTOP_LIST_OFFSET}px)`, minHeight: MIN_LIST_H }}>
-							<AutoSizer
-								renderProp={({ height, width }) =>
-									height == null || width == null ? null : (
-										<VariableSizeList
-											ref={desktopListRef}
-											height={height}
-											width={width}
-											itemCount={filtered.length}
-											itemSize={getDesktopItemSize}
-											overscanCount={6}
-										>
-											{({ index, style }: ListChildComponentProps) => (
-												<DesktopRow
-													item={filtered[index]}
-													style={style}
-													open={openRows.has(filtered[index].id)}
-													onToggle={() => toggleRow(filtered[index].id)}
-													onExclude={onExclude}
-												/>
-											)}
-										</VariableSizeList>
-									)
-								}
-							/>
-						</Box>
-					</Paper>
-				</Box>
+				<DesktopVirtualList items={filtered} openRows={openRows} onToggle={toggleRow} onExclude={onExclude} orderBy={orderBy} order={order} onSort={handleSort} />
 			)}
 
 			{filtered.length === 0 && search && (
