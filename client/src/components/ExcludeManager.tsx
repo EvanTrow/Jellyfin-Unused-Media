@@ -21,6 +21,11 @@ import {
   CircularProgress,
   TextField,
   InputAdornment,
+  Card,
+  CardContent,
+  Stack,
+  useTheme,
+  useMediaQuery,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
@@ -37,6 +42,8 @@ interface Props {
 }
 
 export default function ExcludeManager({ items, loading, onRemove, onClearAll }: Props) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [search, setSearch] = React.useState('');
   const [confirmClear, setConfirmClear] = React.useState(false);
   const [removing, setRemoving] = React.useState<string | null>(null);
@@ -117,44 +124,38 @@ export default function ExcludeManager({ items, loading, onRemove, onClearAll }:
                 </InputAdornment>
               ),
             }}
-            sx={{ mb: 2, minWidth: 280 }}
+            sx={{ mb: 2, width: { xs: '100%', sm: 'auto', minWidth: 280 } }}
           />
 
-          <TableContainer component={Paper} variant="outlined">
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Title</TableCell>
-                  <TableCell>Type</TableCell>
-                  <TableCell>Excluded On</TableCell>
-                  <TableCell align="right">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {filtered.map((item) => (
-                  <TableRow key={item.id} hover>
-                    <TableCell>
-                      <Typography variant="body2" fontWeight={500}>
-                        {item.name}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        label={item.type}
-                        size="small"
-                        color={item.type === 'Movie' ? 'primary' : 'secondary'}
-                        variant="outlined"
-                        icon={item.type === 'Movie' ? <MovieIcon /> : <TvIcon />}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      {new Date(item.dateExcluded).toLocaleDateString(undefined, {
-                        year: 'numeric',
-                        month: 'short',
-                        day: 'numeric',
-                      })}
-                    </TableCell>
-                    <TableCell align="right">
+          {/* Mobile card list */}
+          {isMobile ? (
+            <Box>
+              {filtered.map((item) => (
+                <Card key={item.id} variant="outlined" sx={{ mb: 1 }}>
+                  <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography variant="body2" fontWeight={500} noWrap>
+                          {item.name}
+                        </Typography>
+                        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mt: 0.5, flexWrap: 'wrap', gap: 0.5 }}>
+                          <Chip
+                            label={item.type}
+                            size="small"
+                            color={item.type === 'Movie' ? 'primary' : 'secondary'}
+                            variant="outlined"
+                            icon={item.type === 'Movie' ? <MovieIcon /> : <TvIcon />}
+                            sx={{ height: 20, fontSize: '0.7rem' }}
+                          />
+                          <Typography variant="caption" color="text.secondary">
+                            {new Date(item.dateExcluded).toLocaleDateString(undefined, {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric',
+                            })}
+                          </Typography>
+                        </Stack>
+                      </Box>
                       <Tooltip title="Remove from excluded list">
                         <span>
                           <IconButton
@@ -171,12 +172,71 @@ export default function ExcludeManager({ items, loading, onRemove, onClearAll }:
                           </IconButton>
                         </span>
                       </Tooltip>
-                    </TableCell>
+                    </Box>
+                  </CardContent>
+                </Card>
+              ))}
+            </Box>
+          ) : (
+            /* Desktop table */
+            <TableContainer component={Paper} variant="outlined">
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Title</TableCell>
+                    <TableCell>Type</TableCell>
+                    <TableCell>Excluded On</TableCell>
+                    <TableCell align="right">Actions</TableCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+                </TableHead>
+                <TableBody>
+                  {filtered.map((item) => (
+                    <TableRow key={item.id} hover>
+                      <TableCell>
+                        <Typography variant="body2" fontWeight={500}>
+                          {item.name}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={item.type}
+                          size="small"
+                          color={item.type === 'Movie' ? 'primary' : 'secondary'}
+                          variant="outlined"
+                          icon={item.type === 'Movie' ? <MovieIcon /> : <TvIcon />}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        {new Date(item.dateExcluded).toLocaleDateString(undefined, {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </TableCell>
+                      <TableCell align="right">
+                        <Tooltip title="Remove from excluded list">
+                          <span>
+                            <IconButton
+                              size="small"
+                              color="error"
+                              onClick={() => handleRemove(item.id)}
+                              disabled={removing === item.id}
+                            >
+                              {removing === item.id ? (
+                                <CircularProgress size={16} />
+                              ) : (
+                                <DeleteIcon fontSize="small" />
+                              )}
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
 
           {filtered.length === 0 && search && (
             <Box sx={{ textAlign: 'center', py: 3 }}>

@@ -19,6 +19,7 @@ import {
   Badge,
   Divider,
   Container,
+  useMediaQuery,
 } from '@mui/material';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
@@ -27,8 +28,10 @@ import MovieFilterIcon from '@mui/icons-material/MovieFilter';
 import BlockIcon from '@mui/icons-material/Block';
 import AssessmentIcon from '@mui/icons-material/Assessment';
 import SettingsIcon from '@mui/icons-material/Settings';
+import MenuIcon from '@mui/icons-material/Menu';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
+import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 
 import { lightTheme, darkTheme } from './theme';
 import DashboardPage from './pages/DashboardPage';
@@ -36,22 +39,29 @@ import UnusedMediaPage from './pages/UnusedMediaPage';
 import SettingsPage from './pages/SettingsPage';
 import ExcludeManager from './components/ExcludeManager';
 import { fetchExcluded, removeExcluded, clearExcluded } from './services/api';
-import { ExcludedItem, Page } from './types';
-import { SettingsProvider } from './context/SettingsContext';
+import { ExcludedItem } from './types';
+
 
 const DRAWER_WIDTH = 240;
 
+interface NavItem {
+  path: string;
+  label: string;
+  icon: React.ReactNode;
+  badge?: number;
+}
+
 export default function App() {
+  const navigate   = useNavigate();
+  const { pathname } = useLocation();
+
   const [darkMode, setDarkMode] = React.useState(
     () => window.matchMedia('(prefers-color-scheme: dark)').matches
   );
-  const [page, setPage] = React.useState<Page>('dashboard');
 
-  // Excluded state
-  const [excluded, setExcluded] = React.useState<ExcludedItem[]>([]);
+  const [excluded, setExcluded]         = React.useState<ExcludedItem[]>([]);
   const [excludedLoading, setExcludedLoading] = React.useState(true);
 
-  // Snackbar
   const [snackbar, setSnackbar] = React.useState<{
     open: boolean;
     message: string;
@@ -82,28 +92,31 @@ export default function App() {
   };
 
   const theme = darkMode ? darkTheme : lightTheme;
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const [mobileOpen, setMobileOpen] = React.useState(false);
 
-  const navItems: { id: Page; label: string; icon: React.ReactNode; badge?: number }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
+  const handleMobileClose = () => setMobileOpen(false);
+
+  const topNavItems: NavItem[] = [
+    { path: '/', label: 'Dashboard', icon: <DashboardIcon /> },
   ];
 
-  const reportItems: { id: Page; label: string; icon: React.ReactNode; badge?: number }[] = [
-    { id: 'unused-media', label: 'Unused Media', icon: <MovieFilterIcon /> },
-    { id: 'excluded', label: 'Excluded Items', icon: <BlockIcon />, badge: excluded.length || undefined },
+  const reportItems: NavItem[] = [
+    { path: '/reports/unused-media', label: 'Unused Media', icon: <MovieFilterIcon /> },
+    { path: '/reports/excluded',     label: 'Excluded Items', icon: <BlockIcon />, badge: excluded.length || undefined },
   ];
 
-  const drawer = (
+  const drawerContent = (onClose?: () => void) => (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Spacer matching AppBar height */}
       <Toolbar />
       <Divider />
 
       <List dense disablePadding sx={{ pt: 1 }}>
-        {navItems.map((item) => (
+        {topNavItems.map((item) => (
           <ListItemButton
-            key={item.id}
-            selected={page === item.id}
-            onClick={() => setPage(item.id)}
+            key={item.path}
+            selected={pathname === item.path}
+            onClick={() => { navigate(item.path); onClose?.(); }}
             sx={{ borderRadius: 1, mx: 1, mb: 0.5 }}
           >
             <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
@@ -129,9 +142,9 @@ export default function App() {
       >
         {reportItems.map((item) => (
           <ListItemButton
-            key={item.id}
-            selected={page === item.id}
-            onClick={() => setPage(item.id)}
+            key={item.path}
+            selected={pathname === item.path}
+            onClick={() => { navigate(item.path); onClose?.(); }}
             sx={{ borderRadius: 1, mx: 1, mb: 0.5 }}
           >
             <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
@@ -143,13 +156,12 @@ export default function App() {
         ))}
       </List>
 
-      {/* Push settings to the bottom */}
       <Box sx={{ flexGrow: 1 }} />
       <Divider />
       <List dense disablePadding sx={{ pb: 1 }}>
         <ListItemButton
-          selected={page === 'settings'}
-          onClick={() => setPage('settings')}
+          selected={pathname === '/settings'}
+          onClick={() => { navigate('/settings'); onClose?.(); }}
           sx={{ borderRadius: 1, mx: 1, mt: 0.5 }}
         >
           <ListItemIcon sx={{ minWidth: 36 }}><SettingsIcon /></ListItemIcon>
@@ -160,105 +172,134 @@ export default function App() {
   );
 
   return (
-    <SettingsProvider>
     <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <LocalizationProvider dateAdapter={AdapterDayjs}>
-        <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-          {/* Top AppBar */}
-          <AppBar
-            position="fixed"
-            elevation={0}
-            sx={{
-              zIndex: (t) => t.zIndex.drawer + 1,
-              borderBottom: 1,
-              borderColor: 'divider',
-            }}
-          >
-            <Toolbar>
-              <MovieFilterIcon sx={{ mr: 1.5, fontSize: 28 }} />
-              <Typography variant="h6" fontWeight={700} sx={{ flexGrow: 1 }}>
-                Jellyfin Reports
-              </Typography>
-              <Tooltip title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}>
-                <IconButton color="inherit" onClick={() => setDarkMode(!darkMode)}>
-                  {darkMode ? <Brightness7Icon /> : <Brightness4Icon />}
-                </IconButton>
-              </Tooltip>
-            </Toolbar>
-          </AppBar>
+        <CssBaseline />
+        <LocalizationProvider dateAdapter={AdapterDayjs}>
+          <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+            <AppBar
+              position="fixed"
+              elevation={0}
+              sx={{ zIndex: (t) => t.zIndex.drawer + 1, borderBottom: 1, borderColor: 'divider' }}
+            >
+              <Toolbar>
+                {isMobile && (
+                  <IconButton
+                    color="inherit"
+                    edge="start"
+                    onClick={() => setMobileOpen(true)}
+                    sx={{ mr: 1 }}
+                    aria-label="open navigation"
+                  >
+                    <MenuIcon />
+                  </IconButton>
+                )}
+                <MovieFilterIcon sx={{ mr: 1.5, fontSize: 28 }} />
+                <Typography variant="h6" fontWeight={700} sx={{ flexGrow: 1 }}>
+                  Jellyfin Reports
+                </Typography>
+                <Tooltip title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}>
+                  <IconButton color="inherit" onClick={() => setDarkMode(!darkMode)}>
+                    {darkMode ? <Brightness7Icon /> : <Brightness4Icon />}
+                  </IconButton>
+                </Tooltip>
+              </Toolbar>
+            </AppBar>
 
-          {/* Left Drawer */}
-          <Drawer
-            variant="permanent"
-            sx={{
-              width: DRAWER_WIDTH,
-              flexShrink: 0,
-              '& .MuiDrawer-paper': {
+            {/* Mobile temporary drawer */}
+            <Drawer
+              variant="temporary"
+              open={mobileOpen}
+              onClose={handleMobileClose}
+              ModalProps={{ keepMounted: true }}
+              sx={{
+                display: { xs: 'block', md: 'none' },
+                '& .MuiDrawer-paper': {
+                  width: DRAWER_WIDTH,
+                  boxSizing: 'border-box',
+                  borderRight: 1,
+                  borderColor: 'divider',
+                },
+              }}
+            >
+              {drawerContent(handleMobileClose)}
+            </Drawer>
+
+            {/* Desktop permanent drawer */}
+            <Drawer
+              variant="permanent"
+              sx={{
+                display: { xs: 'none', md: 'block' },
                 width: DRAWER_WIDTH,
-                boxSizing: 'border-box',
-                borderRight: 1,
-                borderColor: 'divider',
-              },
-            }}
-          >
-            {drawer}
-          </Drawer>
+                flexShrink: 0,
+                '& .MuiDrawer-paper': {
+                  width: DRAWER_WIDTH,
+                  boxSizing: 'border-box',
+                  borderRight: 1,
+                  borderColor: 'divider',
+                },
+              }}
+            >
+              {drawerContent()}
+            </Drawer>
 
-          {/* Main content */}
-          <Box
-            component="main"
-            sx={{
-              flexGrow: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              minWidth: 0,
-            }}
-          >
-            {/* Offset for AppBar */}
-            <Toolbar />
-            <Container maxWidth="xl" sx={{ py: 3, flexGrow: 1 }}>
-              {page === 'dashboard' && <DashboardPage />}
-              {page === 'unused-media' && (
-                <UnusedMediaPage
-                  excluded={excluded}
-                  onExcluded={(item) => setExcluded((prev) => [...prev, item])}
-                  onSnackbar={showSnackbar}
-                />
-              )}
-              {page === 'excluded' && (
-                <ExcludeManager
-                  items={excluded}
-                  loading={excludedLoading}
-                  onRemove={handleRemoveExcluded}
-                  onClearAll={handleClearExcluded}
-                />
-              )}
-              {page === 'settings' && (
-                <SettingsPage onSnackbar={showSnackbar} />
-              )}
-            </Container>
+            <Box
+              component="main"
+              sx={{
+                flexGrow: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                minWidth: 0,
+                width: { xs: '100%', md: `calc(100% - ${DRAWER_WIDTH}px)` },
+              }}
+            >
+              <Toolbar />
+              <Container maxWidth="xl" sx={{ py: { xs: 2, sm: 3 }, px: { xs: 1.5, sm: 3 }, flexGrow: 1 }}>
+                <Routes>
+                  <Route path="/" element={<DashboardPage />} />
+                  <Route
+                    path="/reports/unused-media"
+                    element={
+                      <UnusedMediaPage
+                        excluded={excluded}
+                        onExcluded={(item) => setExcluded((prev) => [...prev, item])}
+                        onSnackbar={showSnackbar}
+                      />
+                    }
+                  />
+                  <Route
+                    path="/reports/excluded"
+                    element={
+                      <ExcludeManager
+                        items={excluded}
+                        loading={excludedLoading}
+                        onRemove={handleRemoveExcluded}
+                        onClearAll={handleClearExcluded}
+                      />
+                    }
+                  />
+                  <Route path="/settings" element={<SettingsPage onSnackbar={showSnackbar} />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </Container>
+            </Box>
           </Box>
-        </Box>
 
-        {/* Snackbar */}
-        <Snackbar
-          open={snackbar.open}
-          autoHideDuration={4000}
-          onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        >
-          <Alert
-            severity={snackbar.severity}
+          <Snackbar
+            open={snackbar.open}
+            autoHideDuration={4000}
             onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
-            variant="filled"
-            elevation={6}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
           >
-            {snackbar.message}
-          </Alert>
-        </Snackbar>
-      </LocalizationProvider>
-    </ThemeProvider>
-    </SettingsProvider>
+            <Alert
+              severity={snackbar.severity}
+              onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+              variant="filled"
+              elevation={6}
+            >
+              {snackbar.message}
+            </Alert>
+          </Snackbar>
+        </LocalizationProvider>
+      </ThemeProvider>
   );
 }

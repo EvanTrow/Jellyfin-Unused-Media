@@ -44,3 +44,26 @@ export async function clearExcluded(): Promise<void> {
 export async function clearServerCache(): Promise<void> {
   await api.delete('/cache');
 }
+
+export async function clearServerCacheReport(report: string): Promise<void> {
+  await api.delete(`/cache/${report}`);
+}
+
+export interface AppSettings {
+  cacheTtlHours: number;
+}
+
+export async function fetchSettings(): Promise<AppSettings> {
+  const response = await api.get<AppSettings>('/settings');
+  return response.data;
+}
+
+export async function saveSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
+  const response = await api.put<AppSettings>('/settings', settings);
+  return response.data;
+}
+
+export async function fetchNowPlaying(): Promise<import('../types').NowPlayingSession[]> {
+  const response = await api.get('/sessions/now-playing');
+  return response.data;
+}

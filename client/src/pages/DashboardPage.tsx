@@ -17,6 +17,7 @@ import VideoLibraryIcon from '@mui/icons-material/VideoLibrary';
 import { useQuery } from '@tanstack/react-query';
 import { fetchDashboardStats } from '../services/api';
 import { LibraryStats } from '../types';
+import NowPlaying from '../components/NowPlaying';
 
 function collectionIcon(type: string) {
   const t = type.toLowerCase();
@@ -138,6 +139,13 @@ export default function DashboardPage() {
   return (
     <Box>
       <Typography variant="h5" fontWeight={700} gutterBottom>
+        Dashboard
+      </Typography>
+
+      {/* Now Playing */}
+      <NowPlaying />
+
+      <Typography variant="h6" fontWeight={700} gutterBottom>
         Library Overview
       </Typography>
 
