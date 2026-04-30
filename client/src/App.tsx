@@ -6,43 +6,43 @@ import {
   Toolbar,
   Typography,
   Box,
-  Container,
-  Tabs,
-  Tab,
+  Drawer,
+  List,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  ListSubheader,
   IconButton,
   Tooltip,
   Snackbar,
   Alert,
   Badge,
+  Divider,
+  Container,
 } from '@mui/material';
 import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
+import DashboardIcon from '@mui/icons-material/Dashboard';
 import MovieFilterIcon from '@mui/icons-material/MovieFilter';
 import BlockIcon from '@mui/icons-material/Block';
+import AssessmentIcon from '@mui/icons-material/Assessment';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 
 import { lightTheme, darkTheme } from './theme';
-import QueryPanel from './components/QueryPanel';
-import MediaTable from './components/MediaTable';
+import DashboardPage from './pages/DashboardPage';
+import UnusedMediaPage from './pages/UnusedMediaPage';
 import ExcludeManager from './components/ExcludeManager';
-import { fetchUnplayedMedia, fetchExcluded, addExcluded, removeExcluded, clearExcluded } from './services/api';
-import { ExcludedItem, MediaItem, QueryParams } from './types';
+import { fetchExcluded, removeExcluded, clearExcluded } from './services/api';
+import { ExcludedItem, Page } from './types';
+
+const DRAWER_WIDTH = 240;
 
 export default function App() {
   const [darkMode, setDarkMode] = React.useState(
     () => window.matchMedia('(prefers-color-scheme: dark)').matches
   );
-  const [activeTab, setActiveTab] = React.useState(0);
-
-  // Query state
-  const [queryLoading, setQueryLoading] = React.useState(false);
-  const [queryError, setQueryError] = React.useState<string | null>(null);
-  const [mediaItems, setMediaItems] = React.useState<MediaItem[]>([]);
-  const [hasQueried, setHasQueried] = React.useState(false);
-
-  // Filter state
-  const [showUnwatchedOnly, setShowUnwatchedOnly] = React.useState(true);
+  const [page, setPage] = React.useState<Page>('dashboard');
 
   // Excluded state
   const [excluded, setExcluded] = React.useState<ExcludedItem[]>([]);
@@ -59,45 +59,12 @@ export default function App() {
     setSnackbar({ open: true, message, severity });
   };
 
-  // Load excluded items on mount
   React.useEffect(() => {
     fetchExcluded()
       .then(setExcluded)
       .catch(() => showSnackbar('Failed to load excluded items', 'error'))
       .finally(() => setExcludedLoading(false));
   }, []);
-
-  const handleQuery = async (params: QueryParams) => {
-    setQueryLoading(true);
-    setQueryError(null);
-    setHasQueried(true);
-
-    try {
-      const result = await fetchUnplayedMedia(params);
-      setMediaItems(result.items);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Query failed';
-      const axiosError = err as { response?: { data?: { error?: string } } };
-      const serverMsg = axiosError?.response?.data?.error;
-      setQueryError(serverMsg || message);
-      setMediaItems([]);
-    } finally {
-      setQueryLoading(false);
-    }
-  };
-
-  const handleExclude = async (item: MediaItem) => {
-    try {
-      const newExcluded = await addExcluded(item);
-      setExcluded((prev) => [...prev, newExcluded]);
-      setMediaItems((prev) => prev.filter((m) => m.id !== item.id));
-      showSnackbar(`"${item.name}" added to exclude list`);
-    } catch (err: unknown) {
-      const axiosError = err as { response?: { data?: { error?: string } } };
-      const msg = axiosError?.response?.data?.error || 'Failed to exclude item';
-      showSnackbar(msg, 'error');
-    }
-  };
 
   const handleRemoveExcluded = async (id: string) => {
     await removeExcluded(id);
@@ -111,25 +78,89 @@ export default function App() {
     showSnackbar('Exclude list cleared');
   };
 
-  // Client-side filter: optionally show only unwatched
-  const displayedItems = React.useMemo(
-    () => (showUnwatchedOnly ? mediaItems.filter((i) => !i.watched) : mediaItems),
-    [mediaItems, showUnwatchedOnly]
-  );
-
   const theme = darkMode ? darkTheme : lightTheme;
+
+  const navItems: { id: Page; label: string; icon: React.ReactNode; badge?: number }[] = [
+    { id: 'dashboard', label: 'Dashboard', icon: <DashboardIcon /> },
+  ];
+
+  const reportItems: { id: Page; label: string; icon: React.ReactNode; badge?: number }[] = [
+    { id: 'unused-media', label: 'Unused Media', icon: <MovieFilterIcon /> },
+    { id: 'excluded', label: 'Excluded Items', icon: <BlockIcon />, badge: excluded.length || undefined },
+  ];
+
+  const drawer = (
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Spacer matching AppBar height */}
+      <Toolbar />
+      <Divider />
+
+      <List dense disablePadding sx={{ pt: 1 }}>
+        {navItems.map((item) => (
+          <ListItemButton
+            key={item.id}
+            selected={page === item.id}
+            onClick={() => setPage(item.id)}
+            sx={{ borderRadius: 1, mx: 1, mb: 0.5 }}
+          >
+            <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
+            <ListItemText primary={item.label} />
+          </ListItemButton>
+        ))}
+      </List>
+
+      <Divider sx={{ mx: 2, my: 1 }} />
+
+      <List
+        dense
+        disablePadding
+        subheader={
+          <ListSubheader
+            disableSticky
+            sx={{ display: 'flex', alignItems: 'center', gap: 0.5, lineHeight: '32px', px: 2 }}
+          >
+            <AssessmentIcon fontSize="small" />
+            Reports
+          </ListSubheader>
+        }
+      >
+        {reportItems.map((item) => (
+          <ListItemButton
+            key={item.id}
+            selected={page === item.id}
+            onClick={() => setPage(item.id)}
+            sx={{ borderRadius: 1, mx: 1, mb: 0.5 }}
+          >
+            <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
+            <ListItemText primary={item.label} />
+            {item.badge != null && item.badge > 0 && (
+              <Badge badgeContent={item.badge} color="error" max={999} />
+            )}
+          </ListItemButton>
+        ))}
+      </List>
+    </Box>
+  );
 
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <LocalizationProvider dateAdapter={AdapterDayjs}>
-        <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-          {/* App Bar */}
-          <AppBar position="sticky" elevation={0} sx={{ borderBottom: 1, borderColor: 'divider' }}>
+        <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+          {/* Top AppBar */}
+          <AppBar
+            position="fixed"
+            elevation={0}
+            sx={{
+              zIndex: (t) => t.zIndex.drawer + 1,
+              borderBottom: 1,
+              borderColor: 'divider',
+            }}
+          >
             <Toolbar>
               <MovieFilterIcon sx={{ mr: 1.5, fontSize: 28 }} />
               <Typography variant="h6" fontWeight={700} sx={{ flexGrow: 1 }}>
-                Jellyfin Unused Media
+                Jellyfin Reports
               </Typography>
               <Tooltip title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}>
                 <IconButton color="inherit" onClick={() => setDarkMode(!darkMode)}>
@@ -137,67 +168,56 @@ export default function App() {
                 </IconButton>
               </Tooltip>
             </Toolbar>
-
-            <Tabs
-              value={activeTab}
-              onChange={(_e, v) => setActiveTab(v)}
-              sx={{ px: 2, minHeight: 42 }}
-              TabIndicatorProps={{ style: { height: 3 } }}
-            >
-              <Tab
-                label={
-                  hasQueried
-                    ? `Media (${displayedItems.length}${displayedItems.length !== mediaItems.length ? ` of ${mediaItems.length}` : ''})`
-                    : 'Media'
-                }
-                sx={{ minHeight: 42 }}
-              />
-              <Tab
-                label={
-                  <Badge badgeContent={excluded.length} color="error" max={999}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                      <BlockIcon fontSize="small" />
-                      Excluded Items
-                    </Box>
-                  </Badge>
-                }
-                sx={{ minHeight: 42 }}
-              />
-            </Tabs>
           </AppBar>
 
-          {/* Main Content */}
-          <Container maxWidth="xl" sx={{ py: 3, flexGrow: 1 }}>
-            {/* Query Tab */}
-            {activeTab === 0 && (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <QueryPanel
-                  onQuery={handleQuery}
-                  loading={queryLoading}
-                  resultCount={hasQueried ? displayedItems.length : undefined}
-                  totalCount={hasQueried ? mediaItems.length : undefined}
-                  showUnwatchedOnly={showUnwatchedOnly}
-                  onShowUnwatchedOnlyChange={setShowUnwatchedOnly}
-                  error={queryError}
-                />
-                <MediaTable
-                  items={displayedItems}
-                  loading={queryLoading}
-                  onExclude={handleExclude}
-                />
-              </Box>
-            )}
+          {/* Left Drawer */}
+          <Drawer
+            variant="permanent"
+            sx={{
+              width: DRAWER_WIDTH,
+              flexShrink: 0,
+              '& .MuiDrawer-paper': {
+                width: DRAWER_WIDTH,
+                boxSizing: 'border-box',
+                borderRight: 1,
+                borderColor: 'divider',
+              },
+            }}
+          >
+            {drawer}
+          </Drawer>
 
-            {/* Excluded Tab */}
-            {activeTab === 1 && (
-              <ExcludeManager
-                items={excluded}
-                loading={excludedLoading}
-                onRemove={handleRemoveExcluded}
-                onClearAll={handleClearExcluded}
-              />
-            )}
-          </Container>
+          {/* Main content */}
+          <Box
+            component="main"
+            sx={{
+              flexGrow: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              minWidth: 0,
+            }}
+          >
+            {/* Offset for AppBar */}
+            <Toolbar />
+            <Container maxWidth="xl" sx={{ py: 3, flexGrow: 1 }}>
+              {page === 'dashboard' && <DashboardPage />}
+              {page === 'unused-media' && (
+                <UnusedMediaPage
+                  excluded={excluded}
+                  onExcluded={(item) => setExcluded((prev) => [...prev, item])}
+                  onSnackbar={showSnackbar}
+                />
+              )}
+              {page === 'excluded' && (
+                <ExcludeManager
+                  items={excluded}
+                  loading={excludedLoading}
+                  onRemove={handleRemoveExcluded}
+                  onClearAll={handleClearExcluded}
+                />
+              )}
+            </Container>
+          </Box>
         </Box>
 
         {/* Snackbar */}

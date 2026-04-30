@@ -27,6 +27,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import MovieIcon from '@mui/icons-material/Movie';
 import TvIcon from '@mui/icons-material/Tv';
 import PersonIcon from '@mui/icons-material/Person';
+import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import { MediaItem, SortDirection, SortField } from '../types';
@@ -90,17 +91,8 @@ function SortableHeader({
   );
 }
 
-function ExpandableRow({
-  item, onExclude, orderBy, order, handleSort,
-}: {
-  item: MediaItem;
-  onExclude: (item: MediaItem) => void;
-  orderBy: SortField;
-  order: SortDirection;
-  handleSort: (f: SortField) => void;
-}) {
+function ExpandableRow({ item, onExclude }: { item: MediaItem; onExclude: (item: MediaItem) => void }) {
   const [open, setOpen] = React.useState(false);
-  void orderBy; void order; void handleSort; // used in parent only
 
   return (
     <>
@@ -166,6 +158,15 @@ function ExpandableRow({
           )}
         </TableCell>
 
+        {/* Requested By */}
+        <TableCell>
+          {item.requestedBy ? (
+            <Chip icon={<AddCircleOutlineIcon />} label={item.requestedBy} size="small" color="info" variant="outlined" />
+          ) : (
+            <Typography variant="caption" color="text.disabled">—</Typography>
+          )}
+        </TableCell>
+
         {/* Last Watched By */}
         <TableCell>
           {item.lastWatchedBy ? (
@@ -195,7 +196,7 @@ function ExpandableRow({
       {/* Detail row */}
       {item.overview && (
         <TableRow>
-          <TableCell colSpan={11} sx={{ py: 0, borderBottom: open ? undefined : 'none' }}>
+          <TableCell colSpan={12} sx={{ py: 0, borderBottom: open ? undefined : 'none' }}>
             <Collapse in={open} timeout="auto" unmountOnExit>
               <Box sx={{ py: 1.5, px: 2, bgcolor: 'action.hover', borderRadius: 1, my: 0.5 }}>
                 <Typography variant="body2" color="text.secondary">{item.overview}</Typography>
@@ -226,6 +227,7 @@ export default function MediaTable({ items, loading, onExclude }: Props) {
           !q ||
           item.name.toLowerCase().includes(q) ||
           item.genres.some((g) => g.toLowerCase().includes(q)) ||
+          (item.requestedBy ?? '').toLowerCase().includes(q) ||
           (item.lastWatchedBy ?? '').toLowerCase().includes(q)
       )
       .sort(getComparator(order, orderBy));
@@ -250,7 +252,7 @@ export default function MediaTable({ items, loading, onExclude }: Props) {
       <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
         <TextField
           size="small"
-          placeholder="Filter by title, genre, or last watched by…"
+          placeholder="Filter by title, genre, requested by, or last watched by…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           InputProps={{
@@ -260,7 +262,7 @@ export default function MediaTable({ items, loading, onExclude }: Props) {
               </InputAdornment>
             ),
           }}
-          sx={{ minWidth: 320 }}
+          sx={{ minWidth: 360 }}
         />
         {search && (
           <Typography variant="body2" color="text.secondary">
@@ -281,6 +283,7 @@ export default function MediaTable({ items, loading, onExclude }: Props) {
               <SortableHeader id="dateAdded" label="Date Added" {...sortProps} />
               <TableCell>Runtime</TableCell>
               <SortableHeader id="watched" label="Status" {...sortProps} />
+              <SortableHeader id="requestedBy" label="Requested By" {...sortProps} />
               <SortableHeader id="lastWatchedBy" label="Last Watched By" {...sortProps} />
               <SortableHeader id="lastWatchedDate" label="Last Watched" {...sortProps} />
               <TableCell align="right">Actions</TableCell>
@@ -288,14 +291,7 @@ export default function MediaTable({ items, loading, onExclude }: Props) {
           </TableHead>
           <TableBody>
             {filtered.map((item) => (
-              <ExpandableRow
-                key={item.id}
-                item={item}
-                onExclude={onExclude}
-                orderBy={orderBy}
-                order={order}
-                handleSort={handleSort}
-              />
+              <ExpandableRow key={item.id} item={item} onExclude={onExclude} />
             ))}
           </TableBody>
         </Table>

@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import mediaRoutes from './routes/media';
 import excludedRoutes from './routes/excluded';
+import dashboardRoutes from './routes/dashboard';
 
 dotenv.config();
 
@@ -15,6 +16,7 @@ app.use(express.json());
 
 app.use('/api/media', mediaRoutes);
 app.use('/api/excluded', excludedRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -34,6 +36,6 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 app.listen(PORT, () => {
-  console.log(`🎬 Jellyfin Unused Media server running on http://localhost:${PORT}`);
+  console.log(`🎬 Jellyfin Reports server running on http://localhost:${PORT}`);
   console.log(`   Jellyfin URL: ${process.env.JELLYFIN_URL || 'not configured'}`);
 });

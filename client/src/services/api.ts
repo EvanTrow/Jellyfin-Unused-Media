@@ -1,7 +1,12 @@
 import axios from 'axios';
-import { ExcludedItem, MediaItem, QueryParams } from '../types';
+import { DashboardStats, ExcludedItem, MediaItem, QueryParams } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
+
+export async function fetchDashboardStats(): Promise<DashboardStats> {
+  const response = await api.get('/dashboard');
+  return response.data;
+}
 
 export async function fetchUnplayedMedia(
   params: QueryParams
@@ -10,10 +15,8 @@ export async function fetchUnplayedMedia(
     includeMovies: String(params.includeMovies),
     includeShows: String(params.includeShows),
   };
-
   if (params.startDate) queryParams.startDate = params.startDate;
   if (params.endDate) queryParams.endDate = params.endDate;
-
   const response = await api.get('/media', { params: queryParams });
   return response.data;
 }

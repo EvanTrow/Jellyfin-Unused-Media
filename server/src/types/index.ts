@@ -9,6 +9,7 @@ genres: string[];
 runtimeMinutes: number | null;
 overview: string | null;
 imageUrl: string | null;
+requestedBy: string | null;
 lastWatchedBy: string | null;
 lastWatchedDate: string | null;
 }
@@ -32,6 +33,26 @@ includeMovies: boolean;
 includeShows: boolean;
 }
 
+export interface LibraryStats {
+id: string;
+name: string;
+collectionType: string;
+movies: number;
+series: number;
+seasons: number;
+episodes: number;
+}
+
+export interface DashboardStats {
+libraries: LibraryStats[];
+totals: {
+movies: number;
+series: number;
+seasons: number;
+episodes: number;
+};
+}
+
 export interface JellyfinUser {
 Id: string;
 Name: string;
@@ -51,6 +72,7 @@ OfficialRating?: string;
 CommunityRating?: number;
 RunTimeTicks?: number;
 ImageTags?: { Primary?: string };
+ProviderIds?: { Tmdb?: string; Tvdb?: string; [key: string]: string | undefined };
 UserData?: {
 LastPlayedDate?: string;
 PlayCount?: number;
@@ -60,4 +82,11 @@ PlayCount?: number;
 export interface JellyfinQueryResult {
 Items: JellyfinItem[];
 TotalRecordCount: number;
+}
+
+export interface JellyfinVirtualFolder {
+Name: string;
+CollectionType: string;
+ItemId: string;
+Locations: string[];
 }

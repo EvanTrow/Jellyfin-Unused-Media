@@ -9,6 +9,7 @@ genres: string[];
 runtimeMinutes: number | null;
 overview: string | null;
 imageUrl: string | null;
+requestedBy: string | null;
 lastWatchedBy: string | null;
 lastWatchedDate: string | null;
 }
@@ -32,5 +33,26 @@ items: MediaItem[];
 totalCount: number;
 }
 
+export interface LibraryStats {
+id: string;
+name: string;
+collectionType: string;
+movies: number;
+series: number;
+seasons: number;
+episodes: number;
+}
+
+export interface DashboardStats {
+libraries: LibraryStats[];
+totals: {
+movies: number;
+series: number;
+seasons: number;
+episodes: number;
+};
+}
+
 export type SortDirection = 'asc' | 'desc';
-export type SortField = 'name' | 'type' | 'dateAdded' | 'year' | 'watched' | 'lastWatchedBy' | 'lastWatchedDate';
+export type SortField = 'name' | 'type' | 'dateAdded' | 'year' | 'watched' | 'requestedBy' | 'lastWatchedBy' | 'lastWatchedDate';
+export type Page = 'dashboard' | 'unused-media' | 'excluded';
