@@ -11,6 +11,11 @@ A self-hosted web dashboard for your [Jellyfin](https://jellyfin.org) media serv
 ### 📊 Dashboard
 - Per-library counts of **movies**, **series**, **seasons**, and **episodes**
 - Combined totals across all libraries
+- **Now Playing** panel — live view of active streams, auto-refreshes every 10 seconds
+  - Play / pause state with progress bar and position interpolation between polls
+  - Stream method badge: **Direct Play** · **Direct Stream** · **Transcoding**
+  - Video and audio codec, bitrate, framerate, and transcode reasons
+  - User(s) and client device info
 
 ### 🎬 Unused Media Report
 - Query all **movies** and **TV shows** — episodes rolled up to series level
@@ -21,16 +26,24 @@ A self-hosted web dashboard for your [Jellyfin](https://jellyfin.org) media serv
 - **Exclude list** – permanently hide specific titles from results (persisted to disk)
 - Client-side search, sort, and filtering
 
+### 📜 Watch History
+- Full playback history across all users
+- Filter by one or more users
+- Shows thumbnail, title (series + episode for TV), type, year, runtime, user, start time, and playback duration
+- Infinite-scroll pagination (50 records per page)
+
 ### 💾 Disk Cache
 - Each Jellyfin item is cached individually on disk by its unique ID
 - Cache survives server restarts — no re-querying on startup
 - **Hybrid fetch**: new/uncached items are fetched fresh; cached items are returned instantly
+- Configurable **cache TTL** (default 4 hours) — stale entries are refreshed automatically
 - Clear cache manually per-report or all at once from the **Settings** page
 
 ### 🎨 UI
-- Left sidebar navigation with **Dashboard**, **Reports**, and **Settings** sections
+- Left sidebar navigation with **Dashboard**, **Reports**, **Watch History**, and **Settings** sections
 - Light / dark mode (follows system preference)
 - Poster thumbnails, genre chips, expandable overviews
+- Images proxied through the backend — Jellyfin API key is never exposed to the browser
 
 ---
 
@@ -141,7 +154,7 @@ npm start
 
 ### Cache
 - Cache files: `server/data/cache/{reportName}/{jellyfinItemId}.json`
-- No TTL — cache is permanent until manually cleared
+- TTL is configurable from the **Settings** page (default: 4 hours); stale entries are refreshed automatically on next query
 - Clear from the **Settings** page (per-report or all at once), or `DELETE /api/cache`
 
 ---
@@ -160,22 +173,30 @@ npm start
 │   │   │   ├── dashboard.ts     GET /api/dashboard
 │   │   │   ├── media.ts         GET /api/media
 │   │   │   ├── excluded.ts      CRUD /api/excluded
-│   │   │   └── cache.ts         GET|DELETE /api/cache[/:report]
+│   │   │   ├── cache.ts         GET|DELETE /api/cache[/:report]
+│   │   │   ├── settings.ts      GET|PUT /api/settings
+│   │   │   ├── sessions.ts      GET /api/sessions/now-playing
+│   │   │   ├── watchHistory.ts  GET /api/watch-history
+│   │   │   ├── users.ts         GET /api/users
+│   │   │   └── proxy.ts         GET /api/proxy/image
 │   │   ├── services/
 │   │   │   ├── jellyfin.ts      Jellyfin API + hybrid cache logic
 │   │   │   ├── overseerr.ts     Overseerr / Jellyseerr integration
-│   │   │   └── diskCache.ts     Per-item disk cache helpers
+│   │   │   ├── diskCache.ts     Per-item disk cache helpers
+│   │   │   └── settings.ts      Persistent app settings (TTL, etc.)
 │   │   └── types/
-│   ├── data/                    excluded.json (auto-created)
+│   ├── data/                    excluded.json + settings.json (auto-created)
 │   └── cache/                   Disk cache (auto-created)
 └── client/                      React + Material UI frontend
     └── src/
         ├── pages/
         │   ├── DashboardPage.tsx
         │   ├── UnusedMediaPage.tsx
+        │   ├── WatchHistoryPage.tsx
         │   └── SettingsPage.tsx
         ├── components/
         │   ├── MediaTable.tsx
+        │   ├── NowPlaying.tsx
         │   ├── QueryPanel.tsx
         │   └── ExcludeManager.tsx
         ├── context/
@@ -199,4 +220,10 @@ npm start
 | `GET` | `/api/cache` | Cache stats (per-report item counts) |
 | `DELETE` | `/api/cache` | Clear all cache |
 | `DELETE` | `/api/cache/:report` | Clear one report cache |
+| `GET` | `/api/settings` | Get app settings (e.g. cache TTL) |
+| `PUT` | `/api/settings` | Update app settings |
+| `GET` | `/api/sessions/now-playing` | Active Jellyfin playback sessions |
+| `GET` | `/api/watch-history` | Paginated watch history (`?offset&limit&users`) |
+| `GET` | `/api/users` | Jellyfin user list |
+| `GET` | `/api/proxy/image` | Proxy Jellyfin item images (`?itemId&imageType&tag&maxWidth`) |
 | `GET` | `/api/health` | Health check |
