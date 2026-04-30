@@ -53,6 +53,13 @@ export interface DashboardStats {
 	};
 }
 
+export interface LibraryGrowthPoint {
+	date: string; // YYYY-MM-DD
+	movies: number; // cumulative bytes
+	series: number; // cumulative bytes
+	total: number; // cumulative bytes
+}
+
 export interface JellyfinUser {
 	Id: string;
 	Name: string;
@@ -74,8 +81,10 @@ export interface JellyfinItem {
 	OfficialRating?: string;
 	CommunityRating?: number;
 	RunTimeTicks?: number;
+	Size?: number;
 	ImageTags?: { Primary?: string; Thumb?: string };
 	ProviderIds?: { Tmdb?: string; Tvdb?: string; [key: string]: string | undefined };
+	MediaSources?: { Size?: number }[];
 	UserData?: {
 		LastPlayedDate?: string;
 		PlayCount?: number;

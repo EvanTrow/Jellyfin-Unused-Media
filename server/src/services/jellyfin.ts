@@ -12,6 +12,7 @@ import {
 	QueryOptions,
 	DashboardStats,
 	LibraryStats,
+	LibraryGrowthPoint,
 	NowPlayingSession,
 	WatchHistoryItem,
 	PlaybackReportingQueryResult,
@@ -21,6 +22,7 @@ import { diskGet, diskSet, diskGetBatch } from './diskCache';
 
 const REPORT_MEDIA = 'media';
 const REPORT_DASHBOARD = 'dashboard';
+const REPORT_LIBRARY_GROWTH = 'library-growth';
 
 function createJellyfinClient(): AxiosInstance {
 	const baseURL = process.env.JELLYFIN_URL || 'http://localhost:8096';
@@ -450,6 +452,7 @@ export async function getNowPlaying(): Promise<NowPlayingSession[]> {
 
 const REPORT_WATCH_HISTORY = 'watch-history';
 const WATCH_HISTORY_CACHE_KEY = 'all';
+const LIBRARY_GROWTH_CACHE_KEY = 'all';
 const MIN_DURATION_SECONDS = 3 * 60; // 3 minutes
 const MERGE_WINDOW_MS = 12 * 60 * 60 * 1000; // 12 hours
 
@@ -464,10 +467,7 @@ export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
 	const client = createJellyfinClient();
 
 	// Query all playback records from the reporting plugin's SQLite database
-	const customQuery =
-		'SELECT DateCreated, UserId, CAST(PlayDuration AS INTEGER) AS PlayDuration, ItemId, ItemType, ItemName ' +
-		'FROM PlaybackActivity ' +
-		'ORDER BY DateCreated ASC';
+	const customQuery = 'SELECT DateCreated, UserId, CAST(PlayDuration AS INTEGER) AS PlayDuration, ItemId, ItemType, ItemName ' + 'FROM PlaybackActivity ' + 'ORDER BY DateCreated ASC';
 
 	type RawRow = {
 		dateCreated: Date;
@@ -561,9 +561,7 @@ export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
 	}
 
 	// Filter out plays shorter than 3 minutes, then sort newest first
-	const filtered = merged
-		.filter((m) => m.totalDuration >= MIN_DURATION_SECONDS)
-		.sort((a, b) => b.startDate.getTime() - a.startDate.getTime());
+	const filtered = merged.filter((m) => m.totalDuration >= MIN_DURATION_SECONDS).sort((a, b) => b.startDate.getTime() - a.startDate.getTime());
 
 	// Fetch Jellyfin item metadata in batches of 50
 	const uniqueItemIds = [...new Set(filtered.map((m) => m.itemId))];
@@ -620,4 +618,70 @@ export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
 	await diskSet(REPORT_WATCH_HISTORY, WATCH_HISTORY_CACHE_KEY, results);
 	console.log(`[cache] watch-history cached ${results.length} items`);
 	return results;
+}
+
+// ---------------------------------------------------------------------------
+// Library Growth — cumulative file size (bytes) over time by DateCreated
+// ---------------------------------------------------------------------------
+function itemSizeBytes(item: JellyfinItem): number {
+	const mediaSourcesBytes = (item.MediaSources ?? []).reduce((sum, src) => sum + (src.Size ?? 0), 0);
+	if (mediaSourcesBytes > 0) return mediaSourcesBytes;
+	return item.Size ?? 0;
+}
+
+export async function getLibraryGrowth(): Promise<LibraryGrowthPoint[]> {
+	const cached = await diskGet<LibraryGrowthPoint[]>(REPORT_LIBRARY_GROWTH, LIBRARY_GROWTH_CACHE_KEY);
+	if (cached) {
+		console.log('[cache] library-growth hit');
+		return cached;
+	}
+
+	console.log('[cache] library-growth miss — fetching from Jellyfin');
+	const client = createJellyfinClient();
+
+	// Include major file-backed item types so total reflects the whole library.
+	// TV is still represented by Episodes for per-series curve, while total includes all.
+	const mediaItems = await fetchAllItems(client, '/Items', {
+		recursive: true,
+		includeItemTypes: 'Movie,Episode,Audio,MusicVideo,Video,Book',
+		fields: 'DateCreated,MediaSources,Size',
+		enableTotalRecordCount: false,
+	});
+
+	// Accumulate bytes per day
+	const moviesByDate = new Map<string, number>();
+	const seriesByDate = new Map<string, number>();
+	const totalByDate = new Map<string, number>();
+
+	for (const item of mediaItems) {
+		if (!item.DateCreated) continue;
+		const day = item.DateCreated.substring(0, 10);
+		const bytes = itemSizeBytes(item);
+		if (bytes <= 0) continue;
+
+		totalByDate.set(day, (totalByDate.get(day) ?? 0) + bytes);
+		if (item.Type === 'Movie') {
+			moviesByDate.set(day, (moviesByDate.get(day) ?? 0) + bytes);
+		} else if (item.Type === 'Episode') {
+			seriesByDate.set(day, (seriesByDate.get(day) ?? 0) + bytes);
+		}
+	}
+
+	// Collect all unique dates and sort ascending
+	const allDates = [...new Set([...totalByDate.keys(), ...moviesByDate.keys(), ...seriesByDate.keys()])].sort();
+
+	// Build cumulative series
+	let cumMovies = 0;
+	let cumSeries = 0;
+	let cumTotal = 0;
+	const points: LibraryGrowthPoint[] = allDates.map((date) => {
+		cumMovies += moviesByDate.get(date) ?? 0;
+		cumSeries += seriesByDate.get(date) ?? 0;
+		cumTotal += totalByDate.get(date) ?? 0;
+		return { date, movies: cumMovies, series: cumSeries, total: cumTotal };
+	});
+
+	await diskSet(REPORT_LIBRARY_GROWTH, LIBRARY_GROWTH_CACHE_KEY, points);
+	console.log(`[cache] library-growth cached ${points.length} points`);
+	return points;
 }

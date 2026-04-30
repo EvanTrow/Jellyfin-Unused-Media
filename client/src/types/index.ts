@@ -53,6 +53,13 @@ export interface DashboardStats {
 	};
 }
 
+export interface LibraryGrowthPoint {
+	date: string; // YYYY-MM-DD
+	movies: number; // cumulative bytes
+	series: number; // cumulative bytes
+	total: number; // cumulative bytes
+}
+
 export type SortDirection = 'asc' | 'desc';
 export type SortField = 'name' | 'type' | 'dateAdded' | 'year' | 'watched' | 'requestedBy' | 'lastWatchedBy' | 'lastWatchedDate';
 
