@@ -139,8 +139,6 @@ export async function getDashboardStats(): Promise<DashboardStats> {
 export async function getAllMedia(options: QueryOptions): Promise<MediaItem[]> {
 	const { startDate, endDate, includeMovies, includeShows } = options;
 	const client = createJellyfinClient();
-	const jellyfinUrl = process.env.JELLYFIN_URL || 'http://localhost:8096';
-	const apiKey = process.env.JELLYFIN_API_KEY || '';
 
 	const commonFields = 'DateCreated,Overview,Genres,ProductionYear,RunTimeTicks,ImageTags,ProviderIds';
 
@@ -164,6 +162,16 @@ export async function getAllMedia(options: QueryOptions): Promise<MediaItem[]> {
 	// 3. Check disk cache — read all at once
 	const allIds = allFiltered.map((i) => i.Id);
 	const cached = await diskGetBatch<MediaItem>(REPORT_MEDIA, allIds);
+
+	// Migrate any cached items that still carry a direct Jellyfin imageUrl
+	for (const [id, item] of cached) {
+		const migrated = migrateImageUrl(item);
+		if (migrated !== item) {
+			cached.set(id, migrated);
+			// Persist the migrated URL so we don't do this on every request
+			diskSet(REPORT_MEDIA, id, migrated).catch(() => {});
+		}
+	}
 
 	const uncachedMovies = filteredMovies.filter((m) => !cached.has(m.Id));
 	const uncachedSeries = filteredSeries.filter((s) => !cached.has(s.Id));
@@ -220,14 +228,14 @@ export async function getAllMedia(options: QueryOptions): Promise<MediaItem[]> {
 			...uncachedMovies.map(async (movie) => {
 				const tmdbId = movie.ProviderIds?.Tmdb ? parseInt(movie.ProviderIds.Tmdb, 10) : undefined;
 				const requestedBy = overseerrMap && tmdbId != null ? (overseerrMap.get(tmdbId) ?? null) : null;
-				const item = buildMediaItem(movie, 'Movie', jellyfinUrl, apiKey, playedMovieIds.has(movie.Id), requestedBy, moviePlayRecords.get(movie.Id));
+				const item = buildMediaItem(movie, 'Movie', playedMovieIds.has(movie.Id), requestedBy, moviePlayRecords.get(movie.Id));
 				await diskSet(REPORT_MEDIA, movie.Id, item);
 				cached.set(movie.Id, item);
 			}),
 			...uncachedSeries.map(async (show) => {
 				const tmdbId = show.ProviderIds?.Tmdb ? parseInt(show.ProviderIds.Tmdb, 10) : undefined;
 				const requestedBy = overseerrMap && tmdbId != null ? (overseerrMap.get(tmdbId) ?? null) : null;
-				const item = buildMediaItem(show, 'Series', jellyfinUrl, apiKey, playedSeriesIds.has(show.Id), requestedBy, seriesPlayRecords.get(show.Id));
+				const item = buildMediaItem(show, 'Series', playedSeriesIds.has(show.Id), requestedBy, seriesPlayRecords.get(show.Id));
 				await diskSet(REPORT_MEDIA, show.Id, item);
 				cached.set(show.Id, item);
 			}),
@@ -252,8 +260,42 @@ function passesDateFilter(dateCreated: string | undefined, startDate?: string, e
 	return true;
 }
 
-function buildMediaItem(item: JellyfinItem, type: 'Movie' | 'Series', jellyfinUrl: string, apiKey: string, watched: boolean, requestedBy: string | null, playRecord?: PlayRecord): MediaItem {
-	const imageUrl = item.ImageTags?.Primary ? `${jellyfinUrl}/Items/${item.Id}/Images/Primary?tag=${item.ImageTags.Primary}&maxWidth=120&api_key=${apiKey}` : null;
+/**
+ * Rewrites a direct Jellyfin image URL (which embeds the API key) to a
+ * backend proxy URL. Returns the same object reference if no change is needed.
+ */
+function migrateImageUrl<T extends { imageUrl: string | null }>(item: T): T {
+	if (!item.imageUrl) return item;
+	if (item.imageUrl.startsWith('/api/proxy/image')) return item;
+
+	// Old format: http(s)://jellyfin-host/Items/<id>/Images/<type>?tag=...&api_key=...
+	try {
+		const url = new URL(item.imageUrl);
+		const parts = url.pathname.split('/');
+		// pathname: /Items/<id>/Images/<type>
+		const itemsIdx = parts.indexOf('Items');
+		const imagesIdx = parts.indexOf('Images');
+		if (itemsIdx === -1 || imagesIdx === -1) return item;
+
+		const itemId = parts[itemsIdx + 1];
+		const imageType = parts[imagesIdx + 1];
+		const tag = url.searchParams.get('tag');
+		const maxWidth = url.searchParams.get('maxWidth');
+
+		if (!itemId || !imageType) return item;
+
+		let proxyUrl = `/api/proxy/image?itemId=${itemId}&imageType=${imageType}`;
+		if (tag) proxyUrl += `&tag=${tag}`;
+		if (maxWidth) proxyUrl += `&maxWidth=${maxWidth}`;
+
+		return { ...item, imageUrl: proxyUrl };
+	} catch {
+		return item;
+	}
+}
+
+function buildMediaItem(item: JellyfinItem, type: 'Movie' | 'Series', watched: boolean, requestedBy: string | null, playRecord?: PlayRecord): MediaItem {
+	const imageUrl = item.ImageTags?.Primary ? `/api/proxy/image?itemId=${item.Id}&imageType=Primary&tag=${item.ImageTags.Primary}&maxWidth=120` : null;
 	return {
 		id: item.Id,
 		name: item.Name,
@@ -303,8 +345,6 @@ function savePausedSince(map: Map<string, number>): void {
 
 export async function getNowPlaying(): Promise<NowPlayingSession[]> {
 	const client = createJellyfinClient();
-	const jellyfinUrl = process.env.JELLYFIN_URL || 'http://localhost:8096';
-	const apiKey = process.env.JELLYFIN_API_KEY || '';
 
 	const response = await client.get<JellyfinSession[]>('/Sessions', {
 		params: { ActiveWithinSeconds: 300 }, // sessions active in last 5 min
@@ -359,9 +399,9 @@ export async function getNowPlaying(): Promise<NowPlayingSession[]> {
 			const trans = s.TranscodingInfo;
 
 			const imageUrl = item.ImageTags?.Primary
-				? `${jellyfinUrl}/Items/${item.Id}/Images/Primary?tag=${item.ImageTags.Primary}&maxWidth=200&api_key=${apiKey}`
+				? `/api/proxy/image?itemId=${item.Id}&imageType=Primary&tag=${item.ImageTags.Primary}&maxWidth=200`
 				: item.ImageTags?.Thumb
-					? `${jellyfinUrl}/Items/${item.Id}/Images/Thumb?tag=${item.ImageTags.Thumb}&maxWidth=200&api_key=${apiKey}`
+					? `/api/proxy/image?itemId=${item.Id}&imageType=Thumb&tag=${item.ImageTags.Thumb}&maxWidth=200`
 					: null;
 
 			const isVideoDirect = trans?.IsVideoDirect ?? play.PlayMethod === 'DirectPlay';
