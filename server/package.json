@@ -11,8 +11,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "jellyfin-unused-media": "file:..",
-    "node-cache": "^5.1.2"
+    "jellyfin-unused-media": "file:.."
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

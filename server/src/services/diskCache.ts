@@ -1,9 +1,9 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-// Cache lives at server/cache/ relative to the project
+// Cache lives at server/data/cache/ relative to the project
 // __dirname is server/src/services/ (dev) or server/dist/src/services/ (compiled)
-const CACHE_DIR = path.join(__dirname, '../../cache');
+const CACHE_DIR = path.join(__dirname, '../../data/cache');
 
 function itemPath(report: string, id: string): string {
 	// Sanitize id so it is safe as a filename
