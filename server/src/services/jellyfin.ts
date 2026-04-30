@@ -13,6 +13,8 @@ import {
 	DashboardStats,
 	LibraryStats,
 	NowPlayingSession,
+	WatchHistoryItem,
+	PlaybackReportingQueryResult,
 } from '../types';
 import { getOverseerrRequests } from './overseerr';
 import { diskGet, diskSet, diskGetBatch } from './diskCache';
@@ -440,4 +442,182 @@ export async function getNowPlaying(): Promise<NowPlayingSession[]> {
 				additionalUsers: (s.AdditionalUsers ?? []).map((u) => u.UserName),
 			};
 		});
+}
+
+// ---------------------------------------------------------------------------
+// Watch History — via jellyfin-plugin-playbackreporting PlaybackActivity table
+// ---------------------------------------------------------------------------
+
+const REPORT_WATCH_HISTORY = 'watch-history';
+const WATCH_HISTORY_CACHE_KEY = 'all';
+const MIN_DURATION_SECONDS = 3 * 60; // 3 minutes
+const MERGE_WINDOW_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
+	const cached = await diskGet<WatchHistoryItem[]>(REPORT_WATCH_HISTORY, WATCH_HISTORY_CACHE_KEY);
+	if (cached) {
+		console.log('[cache] watch-history hit');
+		return cached;
+	}
+
+	console.log('[cache] watch-history miss — querying PlaybackActivity');
+	const client = createJellyfinClient();
+
+	// Query all playback records from the reporting plugin's SQLite database
+	const customQuery =
+		'SELECT DateCreated, UserId, CAST(PlayDuration AS INTEGER) AS PlayDuration, ItemId, ItemType, ItemName ' +
+		'FROM PlaybackActivity ' +
+		'ORDER BY DateCreated ASC';
+
+	type RawRow = {
+		dateCreated: Date;
+		userId: string;
+		playDuration: number;
+		itemId: string;
+		itemType: string;
+		itemName: string;
+	};
+
+	let rawRows: RawRow[] = [];
+
+	try {
+		const resp = await client.post<PlaybackReportingQueryResult>('/user_usage_stats/submit_custom_query', {
+			CustomQueryString: customQuery,
+			ReplaceUserId: false,
+		});
+
+		const { colums, results: rows } = resp.data;
+		const ci = (name: string) => {
+			const idx = colums.indexOf(name);
+			return idx >= 0 ? idx : colums.findIndex((c) => c.toLowerCase() === name.toLowerCase());
+		};
+		const iDate = ci('DateCreated');
+		const iUser = ci('UserId');
+		const iDur = ci('PlayDuration');
+		const iItemId = ci('ItemId');
+		const iItemType = ci('ItemType');
+		const iItemName = ci('ItemName');
+
+		for (const row of rows) {
+			const rawDate = row[iDate] as string;
+			// Plugin stores dates as "YYYY-MM-DD HH:MM:SS" UTC
+			const dateCreated = new Date(rawDate.replace(' ', 'T') + 'Z');
+			const userId = (row[iUser] as string) ?? '';
+			const playDuration = Number(row[iDur] ?? 0);
+			const itemId = (row[iItemId] as string) ?? '';
+			const itemType = (row[iItemType] as string) ?? '';
+			const itemName = (row[iItemName] as string) ?? '';
+
+			if (!userId || !itemId) continue;
+
+			rawRows.push({ dateCreated, userId, playDuration, itemId, itemType, itemName });
+		}
+	} catch (err: unknown) {
+		const e = err as { response?: { status?: number }; message?: string };
+		console.error('[watch-history] PlaybackActivity query failed:', e?.response?.status, e?.message);
+		return [];
+	}
+
+	// --- Merge sessions: same userId+itemId within 12-hour window ---
+	// dateCreated from plugin is end-of-session; compute session start = dateCreated - duration
+	type MergedSession = {
+		userId: string;
+		itemId: string;
+		itemType: string;
+		itemName: string;
+		startDate: Date;
+		totalDuration: number;
+	};
+
+	const merged: MergedSession[] = [];
+
+	for (const row of rawRows) {
+		const sessionStart = new Date(row.dateCreated.getTime() - row.playDuration * 1000);
+
+		// Find the most recent existing session for the same user+item within 12h
+		let found: MergedSession | undefined;
+		for (let i = merged.length - 1; i >= 0; i--) {
+			const m = merged[i];
+			if (m.userId === row.userId && m.itemId === row.itemId) {
+				if (sessionStart.getTime() - m.startDate.getTime() < MERGE_WINDOW_MS) {
+					found = m;
+				}
+				break;
+			}
+		}
+
+		if (found) {
+			found.totalDuration += row.playDuration;
+		} else {
+			merged.push({
+				userId: row.userId,
+				itemId: row.itemId,
+				itemType: row.itemType,
+				itemName: row.itemName,
+				startDate: sessionStart,
+				totalDuration: row.playDuration,
+			});
+		}
+	}
+
+	// Filter out plays shorter than 3 minutes, then sort newest first
+	const filtered = merged
+		.filter((m) => m.totalDuration >= MIN_DURATION_SECONDS)
+		.sort((a, b) => b.startDate.getTime() - a.startDate.getTime());
+
+	// Fetch Jellyfin item metadata in batches of 50
+	const uniqueItemIds = [...new Set(filtered.map((m) => m.itemId))];
+	const itemMetaMap = new Map<string, JellyfinItem>();
+
+	for (let i = 0; i < uniqueItemIds.length; i += 50) {
+		const batch = uniqueItemIds.slice(i, i + 50);
+		try {
+			const resp = await client.get<JellyfinQueryResult>('/Items', {
+				params: {
+					Ids: batch.join(','),
+					Fields: 'SeriesName,RunTimeTicks,ImageTags,ProductionYear,ParentIndexNumber,IndexNumber',
+				},
+			});
+			for (const item of resp.data.Items) {
+				itemMetaMap.set(item.Id, item);
+			}
+		} catch {
+			// Item metadata unavailable for this batch; fall back to plugin ItemName
+		}
+	}
+
+	// Build user ID → name map
+	const users = await getUsers();
+	const userMap = new Map(users.map((u) => [u.Id, u.Name]));
+
+	const results: WatchHistoryItem[] = filtered.map((m) => {
+		const item = itemMetaMap.get(m.itemId);
+		const runtimeTicks = item?.RunTimeTicks ?? 0;
+
+		const imageUrl = item?.ImageTags?.Primary
+			? `/api/proxy/image?itemId=${m.itemId}&imageType=Primary&tag=${item.ImageTags.Primary}&maxWidth=120`
+			: item?.ImageTags?.Thumb
+				? `/api/proxy/image?itemId=${m.itemId}&imageType=Thumb&tag=${item.ImageTags.Thumb}&maxWidth=120`
+				: null;
+
+		return {
+			itemId: m.itemId,
+			itemType: m.itemType === 'Episode' ? 'Episode' : 'Movie',
+			name: item?.Name ?? m.itemName,
+			seriesName: item?.SeriesName ?? null,
+			seasonNumber: item?.ParentIndexNumber ?? null,
+			episodeNumber: item?.IndexNumber ?? null,
+			year: item?.ProductionYear ?? null,
+			runtimeMinutes: runtimeTicks ? Math.round(runtimeTicks / 600_000_000) : null,
+			imageUrl,
+			userName: userMap.get(m.userId) ?? m.userId,
+			userId: m.userId,
+			playbackStartDate: m.startDate.toISOString(),
+			playbackDurationMinutes: Math.round(m.totalDuration / 60),
+		};
+	});
+
+	await diskSet(REPORT_WATCH_HISTORY, WATCH_HISTORY_CACHE_KEY, results);
+	console.log(`[cache] watch-history cached ${results.length} items`);
+	return results;
 }

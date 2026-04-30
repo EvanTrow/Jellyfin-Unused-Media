@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { DashboardStats, ExcludedItem, MediaItem, QueryParams } from '../types';
+import { DashboardStats, ExcludedItem, JellyfinUser, MediaItem, QueryParams, WatchHistoryPage, WatchHistoryParams } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -65,5 +65,22 @@ export async function saveSettings(settings: Partial<AppSettings>): Promise<AppS
 
 export async function fetchNowPlaying(): Promise<import('../types').NowPlayingSession[]> {
   const response = await api.get('/sessions/now-playing');
+  return response.data;
+}
+
+export async function fetchUsers(): Promise<JellyfinUser[]> {
+  const response = await api.get<JellyfinUser[]>('/users');
+  return response.data;
+}
+
+export async function fetchWatchHistory(
+  params: WatchHistoryParams & { offset: number; limit?: number }
+): Promise<WatchHistoryPage> {
+  const queryParams: Record<string, string> = {
+    offset: String(params.offset),
+    limit: String(params.limit ?? 50),
+  };
+  if (params.users.length > 0) queryParams.users = params.users.join(',');
+  const response = await api.get<WatchHistoryPage>('/watch-history', { params: queryParams });
   return response.data;
 }

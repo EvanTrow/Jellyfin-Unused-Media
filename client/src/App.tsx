@@ -29,6 +29,7 @@ import BlockIcon from '@mui/icons-material/Block';
 import AssessmentIcon from '@mui/icons-material/Assessment';
 import SettingsIcon from '@mui/icons-material/Settings';
 import MenuIcon from '@mui/icons-material/Menu';
+import HistoryIcon from '@mui/icons-material/History';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
@@ -36,6 +37,7 @@ import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-
 import { lightTheme, darkTheme } from './theme';
 import DashboardPage from './pages/DashboardPage';
 import UnusedMediaPage from './pages/UnusedMediaPage';
+import WatchHistoryPage from './pages/WatchHistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import ExcludeManager from './components/ExcludeManager';
 import { fetchExcluded, removeExcluded, clearExcluded } from './services/api';
@@ -102,6 +104,7 @@ export default function App() {
   ];
 
   const reportItems: NavItem[] = [
+    { path: '/reports/watch-history',  label: 'Watch History',  icon: <HistoryIcon /> },
     { path: '/reports/unused-media', label: 'Unused Media', icon: <MovieFilterIcon /> },
     { path: '/reports/excluded',     label: 'Excluded Items', icon: <BlockIcon />, badge: excluded.length || undefined },
   ];
@@ -256,6 +259,7 @@ export default function App() {
               <Container maxWidth="xl" sx={{ py: { xs: 2, sm: 3 }, px: { xs: 1.5, sm: 3 }, flexGrow: 1 }}>
                 <Routes>
                   <Route path="/" element={<DashboardPage />} />
+                  <Route path="/reports/watch-history" element={<WatchHistoryPage />} />
                   <Route
                     path="/reports/unused-media"
                     element={

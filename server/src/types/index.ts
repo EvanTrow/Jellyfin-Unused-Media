@@ -64,6 +64,9 @@ export interface JellyfinItem {
 	Type: string;
 	SeriesId?: string;
 	SeriesName?: string;
+	SeasonName?: string;
+	IndexNumber?: number;
+	ParentIndexNumber?: number;
 	DateCreated?: string;
 	ProductionYear?: number;
 	Overview?: string;
@@ -71,12 +74,35 @@ export interface JellyfinItem {
 	OfficialRating?: string;
 	CommunityRating?: number;
 	RunTimeTicks?: number;
-	ImageTags?: { Primary?: string };
+	ImageTags?: { Primary?: string; Thumb?: string };
 	ProviderIds?: { Tmdb?: string; Tvdb?: string; [key: string]: string | undefined };
 	UserData?: {
 		LastPlayedDate?: string;
 		PlayCount?: number;
+		Played?: boolean;
+		PlaybackPositionTicks?: number;
 	};
+}
+
+export interface PlaybackReportingQueryResult {
+	colums: string[]; // note: plugin typo is intentional
+	results: (string | number | null)[][];
+}
+
+export interface WatchHistoryItem {
+	itemId: string;
+	itemType: 'Movie' | 'Episode';
+	name: string;
+	seriesName: string | null;
+	seasonNumber: number | null;
+	episodeNumber: number | null;
+	year: number | null;
+	runtimeMinutes: number | null;
+	imageUrl: string | null;
+	userName: string;
+	userId: string;
+	playbackStartDate: string;
+	playbackDurationMinutes: number;
 }
 
 export interface JellyfinQueryResult {

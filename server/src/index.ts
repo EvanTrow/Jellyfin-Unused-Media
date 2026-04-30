@@ -9,6 +9,8 @@ import cacheRoutes from './routes/cache';
 import settingsRoutes from './routes/settings';
 import sessionsRoutes from './routes/sessions';
 import proxyRoutes from './routes/proxy';
+import watchHistoryRoutes from './routes/watchHistory';
+import usersRoutes from './routes/users';
 
 dotenv.config();
 
@@ -25,6 +27,8 @@ app.use('/api/cache', cacheRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/sessions', sessionsRoutes);
 app.use('/api/proxy', proxyRoutes);
+app.use('/api/watch-history', watchHistoryRoutes);
+app.use('/api/users', usersRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {

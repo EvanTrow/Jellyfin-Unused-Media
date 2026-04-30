@@ -90,3 +90,34 @@ export interface NowPlayingSession {
 	framerate: number | null;
 	additionalUsers: string[];
 }
+
+export interface JellyfinUser {
+	id: string;
+	name: string;
+}
+
+export interface WatchHistoryItem {
+	itemId: string;
+	itemType: 'Movie' | 'Episode';
+	name: string;
+	seriesName: string | null;
+	seasonNumber: number | null;
+	episodeNumber: number | null;
+	year: number | null;
+	runtimeMinutes: number | null;
+	imageUrl: string | null;
+	userName: string;
+	userId: string;
+	playbackStartDate: string;
+	playbackDurationMinutes: number;
+}
+
+export interface WatchHistoryParams {
+	users: string[]; // user IDs
+}
+
+export interface WatchHistoryPage {
+	items: WatchHistoryItem[];
+	totalCount: number;
+	hasMore: boolean;
+}
