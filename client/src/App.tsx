@@ -17,6 +17,7 @@ import {
   Snackbar,
   Alert,
   Badge,
+  CircularProgress,
   Divider,
   Container,
   useMediaQuery,
@@ -30,18 +31,22 @@ import AssessmentIcon from '@mui/icons-material/Assessment';
 import SettingsIcon from '@mui/icons-material/Settings';
 import MenuIcon from '@mui/icons-material/Menu';
 import HistoryIcon from '@mui/icons-material/History';
+import EventBusyIcon from '@mui/icons-material/EventBusy';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
+import { useQuery } from '@tanstack/react-query';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 
 import { lightTheme, darkTheme } from './theme';
 import DashboardPage from './pages/DashboardPage';
 import UnusedMediaPage from './pages/UnusedMediaPage';
+import MarkedForRemovalPage from './pages/MarkedForRemovalPage';
 import WatchHistoryPage from './pages/WatchHistoryPage';
 import SettingsPage from './pages/SettingsPage';
 import ExcludeManager from './components/ExcludeManager';
-import { fetchExcluded, removeExcluded, clearExcluded } from './services/api';
+import { fetchExcluded, removeExcluded, clearExcluded, fetchMarkedForRemovalMedia } from './services/api';
 import { ExcludedItem } from './types';
+import { isRemovalPastDue, MARKED_FOR_REMOVAL_QUERY_KEY } from './utils/removalCache';
 
 
 const DRAWER_WIDTH = 240;
@@ -51,6 +56,7 @@ interface NavItem {
   label: string;
   icon: React.ReactNode;
   badge?: number;
+  badgeLoading?: boolean;
 }
 
 export default function App() {
@@ -81,6 +87,22 @@ export default function App() {
       .finally(() => setExcludedLoading(false));
   }, []);
 
+  const { data: markedForRemoval, isFetching: markedForRemovalFetching } = useQuery({
+    queryKey: MARKED_FOR_REMOVAL_QUERY_KEY,
+    queryFn: fetchMarkedForRemovalMedia,
+  });
+
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const overdueRemovalCount = React.useMemo(
+    () => (markedForRemoval?.items ?? []).filter((item) => isRemovalPastDue(item, now)).length,
+    [markedForRemoval, now]
+  );
+
   const handleRemoveExcluded = async (id: string) => {
     await removeExcluded(id);
     setExcluded((prev) => prev.filter((item) => item.id !== id));
@@ -106,6 +128,7 @@ export default function App() {
   const reportItems: NavItem[] = [
     { path: '/reports/watch-history',  label: 'Watch History',  icon: <HistoryIcon /> },
     { path: '/reports/unused-media', label: 'Unused Media', icon: <MovieFilterIcon /> },
+    { path: '/reports/marked-for-removal', label: 'Marked for Removal', icon: <EventBusyIcon />, badge: overdueRemovalCount || undefined, badgeLoading: markedForRemovalFetching },
     { path: '/reports/excluded',     label: 'Excluded Items', icon: <BlockIcon />, badge: excluded.length || undefined },
   ];
 
@@ -152,6 +175,9 @@ export default function App() {
           >
             <ListItemIcon sx={{ minWidth: 36 }}>{item.icon}</ListItemIcon>
             <ListItemText primary={item.label} />
+            {item.badgeLoading && (
+              <CircularProgress size={18} thickness={5} color="inherit" sx={{ color: 'text.secondary' }} />
+            )}
             {item.badge != null && item.badge > 0 && (
               <Badge badgeContent={item.badge} color="error" max={999} />
             )}
@@ -270,6 +296,7 @@ export default function App() {
                       />
                     }
                   />
+                  <Route path="/reports/marked-for-removal" element={<MarkedForRemovalPage onSnackbar={showSnackbar} />} />
                   <Route
                     path="/reports/excluded"
                     element={
