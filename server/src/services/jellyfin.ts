@@ -68,6 +68,11 @@ function mergePlayRecord(map: Map<string, PlayRecord>, itemId: string, userName:
 	}
 }
 
+async function getJellyfinServerId(client: AxiosInstance): Promise<string | null> {
+	const response = await client.get<{ Id?: string }>('/System/Info');
+	return response.data.Id ?? null;
+}
+
 export async function getUsers(): Promise<JellyfinUser[]> {
 	const client = createJellyfinClient();
 	const response = await client.get<JellyfinUser[]>('/Users');
@@ -143,8 +148,9 @@ export async function getDashboardStats(): Promise<DashboardStats> {
 export async function getAllMedia(options: QueryOptions): Promise<MediaItem[]> {
 	const { startDate, endDate, includeMovies, includeShows } = options;
 	const client = createJellyfinClient();
+	const serverIdPromise = getJellyfinServerId(client).catch(() => null);
 
-	const commonFields = 'DateCreated,Overview,Genres,ProductionYear,RunTimeTicks,ImageTags,ProviderIds';
+	const commonFields = 'DateCreated,Overview,Genres,ProductionYear,RunTimeTicks,CriticRating,CommunityRating,ImageTags,ProviderIds';
 
 	// 1. Fetch fresh item lists from Jellyfin (lightweight — no play history yet)
 	const [rawMovies, rawSeries] = await Promise.all([
@@ -162,6 +168,8 @@ export async function getAllMedia(options: QueryOptions): Promise<MediaItem[]> {
 	const allFiltered = [...filteredMovies, ...filteredSeries];
 
 	if (allFiltered.length === 0) return [];
+
+	const serverId = await serverIdPromise;
 
 	// 3. Check disk cache — read all at once
 	const allIds = allFiltered.map((i) => i.Id);
@@ -232,14 +240,14 @@ export async function getAllMedia(options: QueryOptions): Promise<MediaItem[]> {
 			...uncachedMovies.map(async (movie) => {
 				const tmdbId = movie.ProviderIds?.Tmdb ? parseInt(movie.ProviderIds.Tmdb, 10) : undefined;
 				const requestedBy = overseerrMap && tmdbId != null ? (overseerrMap.get(tmdbId) ?? null) : null;
-				const item = buildMediaItem(movie, 'Movie', playedMovieIds.has(movie.Id), requestedBy, moviePlayRecords.get(movie.Id));
+				const item = buildMediaItem(movie, 'Movie', playedMovieIds.has(movie.Id), requestedBy, moviePlayRecords.get(movie.Id), serverId);
 				await diskSet(REPORT_MEDIA, movie.Id, item);
 				cached.set(movie.Id, item);
 			}),
 			...uncachedSeries.map(async (show) => {
 				const tmdbId = show.ProviderIds?.Tmdb ? parseInt(show.ProviderIds.Tmdb, 10) : undefined;
 				const requestedBy = overseerrMap && tmdbId != null ? (overseerrMap.get(tmdbId) ?? null) : null;
-				const item = buildMediaItem(show, 'Series', playedSeriesIds.has(show.Id), requestedBy, seriesPlayRecords.get(show.Id));
+				const item = buildMediaItem(show, 'Series', playedSeriesIds.has(show.Id), requestedBy, seriesPlayRecords.get(show.Id), serverId);
 				await diskSet(REPORT_MEDIA, show.Id, item);
 				cached.set(show.Id, item);
 			}),
@@ -250,7 +258,7 @@ export async function getAllMedia(options: QueryOptions): Promise<MediaItem[]> {
 	const results: MediaItem[] = [];
 	for (const item of allFiltered) {
 		const m = cached.get(item.Id);
-		if (m) results.push(m);
+		if (m) results.push(ensureFreshMetadata(m, item, serverId));
 	}
 	return results;
 }
@@ -298,7 +306,26 @@ function migrateImageUrl<T extends { imageUrl: string | null }>(item: T): T {
 	}
 }
 
-function buildMediaItem(item: JellyfinItem, type: 'Movie' | 'Series', watched: boolean, requestedBy: string | null, playRecord?: PlayRecord): MediaItem {
+function buildJellyfinItemUrl(itemId: string, serverId: string | null): string {
+	const baseUrl = (process.env.JELLYFIN_URL || 'http://localhost:8096').replace(/\/$/, '');
+	const serverParam = serverId ? `&serverId=${encodeURIComponent(serverId)}` : '';
+	return `${baseUrl}/web/#/details?id=${encodeURIComponent(itemId)}${serverParam}`;
+}
+
+function ensureJellyfinUrl(item: MediaItem, serverId: string | null): MediaItem {
+	if (item.jellyfinUrl) return item;
+	return { ...item, jellyfinUrl: buildJellyfinItemUrl(item.id, serverId) };
+}
+
+function ensureFreshMetadata(item: MediaItem, source: JellyfinItem, serverId: string | null): MediaItem {
+	const withUrl = ensureJellyfinUrl(item, serverId);
+	const criticRating = source.CriticRating ?? null;
+	const communityRating = source.CommunityRating ?? null;
+	if (withUrl.criticRating === criticRating && withUrl.communityRating === communityRating) return withUrl;
+	return { ...withUrl, criticRating, communityRating };
+}
+
+function buildMediaItem(item: JellyfinItem, type: 'Movie' | 'Series', watched: boolean, requestedBy: string | null, playRecord: PlayRecord | undefined, serverId: string | null): MediaItem {
 	const imageUrl = item.ImageTags?.Primary ? `/api/proxy/image?itemId=${item.Id}&imageType=Primary&tag=${item.ImageTags.Primary}&maxWidth=120` : null;
 	return {
 		id: item.Id,
@@ -309,11 +336,14 @@ function buildMediaItem(item: JellyfinItem, type: 'Movie' | 'Series', watched: b
 		year: item.ProductionYear ?? null,
 		genres: item.Genres ?? [],
 		runtimeMinutes: item.RunTimeTicks != null ? Math.round(item.RunTimeTicks / 600000000) : null,
+		criticRating: item.CriticRating ?? null,
+		communityRating: item.CommunityRating ?? null,
 		overview: item.Overview ?? null,
 		imageUrl,
 		requestedBy,
 		lastWatchedBy: playRecord?.userName ?? null,
 		lastWatchedDate: playRecord?.date ?? null,
+		jellyfinUrl: buildJellyfinItemUrl(item.Id, serverId),
 	};
 }
 

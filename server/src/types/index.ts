@@ -7,11 +7,44 @@ export interface MediaItem {
 	year: number | null;
 	genres: string[];
 	runtimeMinutes: number | null;
+	criticRating: number | null;
+	communityRating: number | null;
 	overview: string | null;
 	imageUrl: string | null;
 	requestedBy: string | null;
 	lastWatchedBy: string | null;
 	lastWatchedDate: string | null;
+	jellyfinUrl: string | null;
+	markedForRemoval?: MarkedRemovalSummary;
+}
+
+export interface RemovalReactionSummary {
+	thumbsUp: number;
+	thumbsDown: number;
+	updatedAt: string;
+}
+
+export interface RemovalDiscordMentions {
+	requestedBy?: string;
+	lastWatchedBy?: string;
+}
+
+export interface MarkedRemovalSummary {
+	removeAt: string;
+	markedAt: string;
+	status: 'Pending' | 'removed';
+	reactions?: RemovalReactionSummary;
+}
+
+export interface MarkedRemovalItem extends MarkedRemovalSummary {
+	id: string;
+	name: string;
+	type: 'Movie' | 'Series';
+	jellyfinUrl: string | null;
+	requestedBy?: string | null;
+	lastWatchedBy?: string | null;
+	discordMentions?: RemovalDiscordMentions;
+	discordMessageId?: string;
 }
 
 export interface PlayRecord {
@@ -31,6 +64,20 @@ export interface QueryOptions {
 	endDate?: string;
 	includeMovies: boolean;
 	includeShows: boolean;
+	noActivityWithin?: NoActivityWithinFilter;
+	excludeRequesters?: string[];
+}
+
+export type NoActivityWithinFilter = '' | '1m' | '2m' | '3m' | '6m' | '1y' | '18m' | 'never';
+
+export interface UnusedMediaOptions {
+	startDate: string | null;
+	endDate: string | null;
+	includeMovies: boolean;
+	includeShows: boolean;
+	showUnwatchedOnly: boolean;
+	noActivityWithin: NoActivityWithinFilter;
+	excludeRequesters: string[];
 }
 
 export interface LibraryStats {
@@ -79,6 +126,7 @@ export interface JellyfinItem {
 	Overview?: string;
 	Genres?: string[];
 	OfficialRating?: string;
+	CriticRating?: number;
 	CommunityRating?: number;
 	RunTimeTicks?: number;
 	Size?: number;

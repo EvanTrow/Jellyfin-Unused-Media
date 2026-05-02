@@ -18,6 +18,7 @@ import {
 	useTheme,
 	useMediaQuery,
 } from '@mui/material';
+import { SxProps, Theme } from '@mui/material/styles';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import BlockIcon from '@mui/icons-material/Block';
 import SearchIcon from '@mui/icons-material/Search';
@@ -29,7 +30,13 @@ import PersonIcon from '@mui/icons-material/Person';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
+import DeleteIcon from '@mui/icons-material/Delete';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
+import EventBusyIcon from '@mui/icons-material/EventBusy';
+import ThumbDownIcon from '@mui/icons-material/ThumbDown';
+import ThumbUpIcon from '@mui/icons-material/ThumbUp';
 import { MediaItem, SortDirection, SortField } from '../types';
+import { isRemovalPastDue } from '../utils/removalCache';
 
 const DESKTOP_HEADER_H = 48;
 const DESKTOP_ROW_H = 72; // estimated height for collapsed desktop row
@@ -45,11 +52,13 @@ const C = {
 	year: 55,
 	dateAdded: 105,
 	runtime: 68,
-	status: 115,
+	criticRating: 72,
+	communityRating: 96,
+	status: 235,
 	requestedBy: 150,
 	lastWatchedBy: 150,
 	lastWatchedDate: 105,
-	actions: 52,
+	actions: 96,
 } as const;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -57,7 +66,11 @@ const C = {
 interface Props {
 	items: MediaItem[];
 	loading: boolean;
-	onExclude: (item: MediaItem) => void;
+	onExclude?: (item: MediaItem) => void;
+	onMarkForRemoval?: (item: MediaItem) => void;
+	onMarkRemoved?: (item: MediaItem) => void;
+	onClearRemovalMark?: (item: MediaItem) => void;
+	preserveItemOrder?: boolean;
 }
 
 function formatDate(dateStr: string | null): string {
@@ -74,6 +87,51 @@ function formatRuntime(minutes: number | null): string {
 	const h = Math.floor(minutes / 60);
 	const m = minutes % 60;
 	return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function formatCriticRating(rating: number | null): string {
+	if (rating == null) return '-';
+	return `${Math.round(rating)}%`;
+}
+
+function formatCommunityRating(rating: number | null): string {
+	if (rating == null) return '-';
+	return Number.isInteger(rating) ? `${rating}/10` : `${rating.toFixed(1)}/10`;
+}
+
+function removalLabel(item: MediaItem): string {
+	if (!item.markedForRemoval) return '';
+	if (item.markedForRemoval.status === 'removed') return 'Removed';
+	return isRemovalPastDue(item) ? 'Delete' : `Removes ${formatDate(item.markedForRemoval.removeAt)}`;
+}
+
+function RemovalStatusChip({ item, sx }: { item: MediaItem; sx: SxProps<Theme> }) {
+	const removed = item.markedForRemoval?.status === 'removed';
+	const pastDue = !removed && isRemovalPastDue(item);
+	const Icon = removed || pastDue ? DeleteForeverIcon : DeleteIcon;
+
+	return (
+		<Chip
+			icon={<Icon />}
+			label={removalLabel(item)}
+			size='small'
+			color={removed || pastDue ? 'error' : 'warning'}
+			variant='outlined'
+			sx={sx}
+		/>
+	);
+}
+
+function RemovalReactionChips({ item, sx }: { item: MediaItem; sx: SxProps<Theme> }) {
+	const reactions = item.markedForRemoval?.reactions;
+	if (!reactions) return null;
+
+	return (
+		<Stack direction='row' spacing={0.5} sx={{ flexShrink: 0 }}>
+			<Chip icon={<ThumbUpIcon />} label={reactions.thumbsUp} size='small' color='success' variant='outlined' sx={sx} />
+			<Chip icon={<ThumbDownIcon />} label={reactions.thumbsDown} size='small' color='error' variant='outlined' sx={sx} />
+		</Stack>
+	);
 }
 
 function descendingComparator(a: MediaItem, b: MediaItem, orderBy: SortField): number {
@@ -138,6 +196,12 @@ function DesktopHeader({ orderBy, order, onSort }: { orderBy: SortField; order: 
 					Runtime
 				</Typography>
 			</Box>
+			<Box sx={{ width: C.criticRating, flexShrink: 0, px: 1 }}>
+				<SortLabel id='criticRating' label='Critic' {...sp} />
+			</Box>
+			<Box sx={{ width: C.communityRating, flexShrink: 0, px: 1 }}>
+				<SortLabel id='communityRating' label='Community' {...sp} />
+			</Box>
 			<Box sx={{ width: C.status, flexShrink: 0, px: 1 }}>
 				<SortLabel id='watched' label='Status' {...sp} />
 			</Box>
@@ -161,10 +225,15 @@ interface DesktopRowProps {
 	item: MediaItem;
 	open: boolean;
 	onToggle: () => void;
-	onExclude: (item: MediaItem) => void;
+	onExclude?: (item: MediaItem) => void;
+	onMarkForRemoval?: (item: MediaItem) => void;
+	onMarkRemoved?: (item: MediaItem) => void;
+	onClearRemovalMark?: (item: MediaItem) => void;
 }
 
-const DesktopRow = React.memo(function DesktopRow({ item, open, onToggle, onExclude }: DesktopRowProps) {
+const DesktopRow = React.memo(function DesktopRow({ item, open, onToggle, onExclude, onMarkForRemoval, onMarkRemoved, onClearRemovalMark }: DesktopRowProps) {
+	const isRemoved = item.markedForRemoval?.status === 'removed';
+
 	return (
 		<Box
 			role='row'
@@ -235,13 +304,29 @@ const DesktopRow = React.memo(function DesktopRow({ item, open, onToggle, onExcl
 					<Typography variant='body2'>{formatRuntime(item.runtimeMinutes)}</Typography>
 				</Box>
 
+				{/* Critic Rating */}
+				<Box sx={{ width: C.criticRating, flexShrink: 0, px: 1 }}>
+					<Typography variant='body2'>{formatCriticRating(item.criticRating)}</Typography>
+				</Box>
+
+				{/* Community Rating */}
+				<Box sx={{ width: C.communityRating, flexShrink: 0, px: 1 }}>
+					<Typography variant='body2'>{formatCommunityRating(item.communityRating)}</Typography>
+				</Box>
+
 				{/* Status */}
 				<Box sx={{ width: C.status, flexShrink: 0, px: 1 }}>
-					{item.watched ? (
-						<Chip icon={<CheckCircleIcon />} label='Watched' size='small' color='success' variant='outlined' sx={{ fontSize: '0.7rem', height: 22 }} />
-					) : (
-						<Chip icon={<RadioButtonUncheckedIcon />} label='Unwatched' size='small' color='default' variant='outlined' sx={{ fontSize: '0.7rem', height: 22 }} />
-					)}
+					<Stack direction='row' spacing={0.5} useFlexGap flexWrap='wrap'>
+						{item.watched ? (
+							<Chip icon={<CheckCircleIcon />} label='Watched' size='small' color='success' variant='outlined' sx={{ fontSize: '0.7rem', height: 22 }} />
+						) : (
+							<Chip icon={<RadioButtonUncheckedIcon />} label='Unwatched' size='small' color='default' variant='outlined' sx={{ fontSize: '0.7rem', height: 22 }} />
+						)}
+						{item.markedForRemoval && (
+							<RemovalStatusChip item={item} sx={{ fontSize: '0.7rem', height: 22 }} />
+						)}
+						{item.markedForRemoval && <RemovalReactionChips item={item} sx={{ fontSize: '0.7rem', height: 22 }} />}
+					</Stack>
 				</Box>
 
 				{/* Requested By */}
@@ -279,18 +364,67 @@ const DesktopRow = React.memo(function DesktopRow({ item, open, onToggle, onExcl
 
 				{/* Actions */}
 				<Box sx={{ width: C.actions, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
-					<Tooltip title='Add to exclude list'>
-						<IconButton
-							size='small'
-							color='error'
-							onClick={(e) => {
-								e.stopPropagation();
-								onExclude(item);
-							}}
-						>
-							<BlockIcon fontSize='small' />
-						</IconButton>
-					</Tooltip>
+					{item.markedForRemoval ? (
+						<>
+							{onMarkRemoved && !isRemoved && (
+								<Tooltip title='Mark as removed'>
+									<IconButton
+										size='small'
+										color='error'
+										onClick={(e) => {
+											e.stopPropagation();
+											onMarkRemoved(item);
+										}}
+									>
+										<DeleteForeverIcon fontSize='small' />
+									</IconButton>
+								</Tooltip>
+							)}
+							{onClearRemovalMark && (
+								<Tooltip title='Remove Discord message and remove mark'>
+									<IconButton
+										size='small'
+										color='warning'
+										onClick={(e) => {
+											e.stopPropagation();
+											onClearRemovalMark(item);
+										}}
+									>
+										<EventBusyIcon fontSize='small' />
+									</IconButton>
+								</Tooltip>
+							)}
+						</>
+					) : (
+						onMarkForRemoval && (
+								<Tooltip title='Mark for removal'>
+									<IconButton
+										size='small'
+										color='warning'
+										onClick={(e) => {
+											e.stopPropagation();
+											onMarkForRemoval(item);
+										}}
+									>
+										<DeleteForeverIcon fontSize='small' />
+									</IconButton>
+								</Tooltip>
+							)
+					)}
+					{onExclude && (
+						<Tooltip title='Add to exclude list'>
+							<IconButton
+								size='small'
+								color='error'
+								onClick={(e) => {
+									e.stopPropagation();
+									onExclude(item);
+								}}
+							>
+								<BlockIcon fontSize='small' />
+							</IconButton>
+						</Tooltip>
+					)}
 				</Box>
 			</Box>
 
@@ -322,11 +456,15 @@ interface MobileCardProps {
 	item: MediaItem;
 	open: boolean;
 	onToggle: () => void;
-	onExclude: (item: MediaItem) => void;
+	onExclude?: (item: MediaItem) => void;
+	onMarkForRemoval?: (item: MediaItem) => void;
+	onMarkRemoved?: (item: MediaItem) => void;
+	onClearRemovalMark?: (item: MediaItem) => void;
 }
 
-const MobileMediaCard = React.memo(function MobileMediaCard({ item, open, onToggle, onExclude }: MobileCardProps) {
+const MobileMediaCard = React.memo(function MobileMediaCard({ item, open, onToggle, onExclude, onMarkForRemoval, onMarkRemoved, onClearRemovalMark }: MobileCardProps) {
 	const hasDetails = !!item.overview || item.genres.length > 0 || !!item.dateAdded || item.runtimeMinutes != null || !!item.lastWatchedDate;
+	const isRemoved = item.markedForRemoval?.status === 'removed';
 
 	return (
 		<Box sx={{ px: 0, pb: 1 }}>
@@ -353,6 +491,12 @@ const MobileMediaCard = React.memo(function MobileMediaCard({ item, open, onTogg
 									sx={{ height: 20, fontSize: '0.7rem' }}
 								/>
 								{item.year != null && <Chip label={item.year} size='small' variant='outlined' sx={{ height: 20, fontSize: '0.7rem' }} />}
+								{item.criticRating != null && (
+									<Chip label={`Critic ${formatCriticRating(item.criticRating)}`} size='small' variant='outlined' sx={{ height: 20, fontSize: '0.7rem' }} />
+								)}
+								{item.communityRating != null && (
+									<Chip label={`Community ${formatCommunityRating(item.communityRating)}`} size='small' variant='outlined' sx={{ height: 20, fontSize: '0.7rem' }} />
+								)}
 								{item.watched ? (
 									<Chip icon={<CheckCircleIcon />} label='Watched' size='small' color='success' variant='outlined' sx={{ height: 20, fontSize: '0.7rem' }} />
 								) : (
@@ -362,16 +506,48 @@ const MobileMediaCard = React.memo(function MobileMediaCard({ item, open, onTogg
 									<Chip icon={<AddCircleOutlineIcon />} label={item.requestedBy} size='small' color='info' variant='outlined' sx={{ height: 20, fontSize: '0.7rem' }} />
 								)}
 								{item.lastWatchedBy && <Chip icon={<PersonIcon />} label={item.lastWatchedBy} size='small' variant='outlined' sx={{ height: 20, fontSize: '0.7rem' }} />}
+								{item.markedForRemoval && (
+									<RemovalStatusChip item={item} sx={{ height: 20, fontSize: '0.7rem' }} />
+								)}
+								{item.markedForRemoval && <RemovalReactionChips item={item} sx={{ height: 20, fontSize: '0.7rem' }} />}
 							</Stack>
 						</Box>
 
 						{/* Action buttons */}
 						<Stack direction='column' alignItems='center' sx={{ flexShrink: 0 }}>
-							<Tooltip title='Add to exclude list'>
-								<IconButton size='small' color='error' onClick={() => onExclude(item)}>
-									<BlockIcon fontSize='small' />
-								</IconButton>
-							</Tooltip>
+							{item.markedForRemoval ? (
+								<>
+									{onMarkRemoved && !isRemoved && (
+										<Tooltip title='Mark as removed'>
+											<IconButton size='small' color='error' onClick={() => onMarkRemoved(item)}>
+												<DeleteForeverIcon fontSize='small' />
+											</IconButton>
+										</Tooltip>
+									)}
+									{onClearRemovalMark && (
+											<Tooltip title='Remove Discord message and remove mark'>
+												<IconButton size='small' color='warning' onClick={() => onClearRemovalMark(item)}>
+													<EventBusyIcon fontSize='small' />
+												</IconButton>
+											</Tooltip>
+										)}
+								</>
+							) : (
+								onMarkForRemoval && (
+										<Tooltip title='Mark for removal'>
+											<IconButton size='small' color='warning' onClick={() => onMarkForRemoval(item)}>
+												<DeleteForeverIcon fontSize='small' />
+											</IconButton>
+										</Tooltip>
+									)
+							)}
+							{onExclude && (
+								<Tooltip title='Add to exclude list'>
+									<IconButton size='small' color='error' onClick={() => onExclude(item)}>
+										<BlockIcon fontSize='small' />
+									</IconButton>
+								</Tooltip>
+							)}
 							{hasDetails && (
 								<IconButton size='small' onClick={onToggle}>
 									{open ? <ExpandLessIcon fontSize='small' /> : <ExpandMoreIcon fontSize='small' />}
@@ -397,6 +573,16 @@ const MobileMediaCard = React.memo(function MobileMediaCard({ item, open, onTogg
 								{item.runtimeMinutes != null && (
 									<Typography variant='caption' color='text.secondary'>
 										Runtime: {formatRuntime(item.runtimeMinutes)}
+									</Typography>
+								)}
+								{item.criticRating != null && (
+									<Typography variant='caption' color='text.secondary'>
+										Critic rating: {formatCriticRating(item.criticRating)}
+									</Typography>
+								)}
+								{item.communityRating != null && (
+									<Typography variant='caption' color='text.secondary'>
+										Community rating: {formatCommunityRating(item.communityRating)}
 									</Typography>
 								)}
 								{item.lastWatchedDate && (
@@ -426,13 +612,16 @@ interface DesktopVirtualListProps {
 	items: MediaItem[];
 	openRows: Set<string>;
 	onToggle: (id: string) => void;
-	onExclude: (item: MediaItem) => void;
+	onExclude?: (item: MediaItem) => void;
+	onMarkForRemoval?: (item: MediaItem) => void;
+	onMarkRemoved?: (item: MediaItem) => void;
+	onClearRemovalMark?: (item: MediaItem) => void;
 	orderBy: SortField;
 	order: SortDirection;
 	onSort: (f: SortField) => void;
 }
 
-function DesktopVirtualList({ items, openRows, onToggle, onExclude, orderBy, order, onSort }: DesktopVirtualListProps) {
+function DesktopVirtualList({ items, openRows, onToggle, onExclude, onMarkForRemoval, onMarkRemoved, onClearRemovalMark, orderBy, order, onSort }: DesktopVirtualListProps) {
 	const parentRef = React.useRef<HTMLDivElement>(null);
 
 	// scrollMargin must be set after mount — parentRef.current is null during the first render.
@@ -452,7 +641,7 @@ function DesktopVirtualList({ items, openRows, onToggle, onExclude, orderBy, ord
 
 	return (
 		<Box sx={{ overflowX: 'auto' }}>
-			<Paper variant='outlined' sx={{ minWidth: 1050 }}>
+			<Paper variant='outlined' sx={{ minWidth: 1290 }}>
 				{/* Sticky header — sticks just below the AppBar */}
 				<Box>
 					<DesktopHeader orderBy={orderBy} order={order} onSort={onSort} />
@@ -473,7 +662,15 @@ function DesktopVirtualList({ items, openRows, onToggle, onExclude, orderBy, ord
 								transform: `translateY(${vItem.start - virtualizer.options.scrollMargin}px)`,
 							}}
 						>
-							<DesktopRow item={items[vItem.index]} open={openRows.has(items[vItem.index].id)} onToggle={() => onToggle(items[vItem.index].id)} onExclude={onExclude} />
+							<DesktopRow
+								item={items[vItem.index]}
+								open={openRows.has(items[vItem.index].id)}
+								onToggle={() => onToggle(items[vItem.index].id)}
+								onExclude={onExclude}
+								onMarkForRemoval={onMarkForRemoval}
+								onMarkRemoved={onMarkRemoved}
+								onClearRemovalMark={onClearRemovalMark}
+							/>
 						</div>
 					))}
 				</div>
@@ -488,10 +685,13 @@ interface MobileVirtualListProps {
 	items: MediaItem[];
 	openRows: Set<string>;
 	onToggle: (id: string) => void;
-	onExclude: (item: MediaItem) => void;
+	onExclude?: (item: MediaItem) => void;
+	onMarkForRemoval?: (item: MediaItem) => void;
+	onMarkRemoved?: (item: MediaItem) => void;
+	onClearRemovalMark?: (item: MediaItem) => void;
 }
 
-function MobileVirtualList({ items, openRows, onToggle, onExclude }: MobileVirtualListProps) {
+function MobileVirtualList({ items, openRows, onToggle, onExclude, onMarkForRemoval, onMarkRemoved, onClearRemovalMark }: MobileVirtualListProps) {
 	const parentRef = React.useRef<HTMLDivElement>(null);
 
 	const [scrollMargin, setScrollMargin] = React.useState(0);
@@ -523,7 +723,15 @@ function MobileVirtualList({ items, openRows, onToggle, onExclude }: MobileVirtu
 						transform: `translateY(${vItem.start - virtualizer.options.scrollMargin}px)`,
 					}}
 				>
-					<MobileMediaCard item={items[vItem.index]} open={openRows.has(items[vItem.index].id)} onToggle={() => onToggle(items[vItem.index].id)} onExclude={onExclude} />
+					<MobileMediaCard
+						item={items[vItem.index]}
+						open={openRows.has(items[vItem.index].id)}
+						onToggle={() => onToggle(items[vItem.index].id)}
+						onExclude={onExclude}
+						onMarkForRemoval={onMarkForRemoval}
+						onMarkRemoved={onMarkRemoved}
+						onClearRemovalMark={onClearRemovalMark}
+					/>
 				</div>
 			))}
 		</div>
@@ -532,7 +740,7 @@ function MobileVirtualList({ items, openRows, onToggle, onExclude }: MobileVirtu
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function MediaTable({ items, loading, onExclude }: Props) {
+export default function MediaTable({ items, loading, onExclude, onMarkForRemoval, onMarkRemoved, onClearRemovalMark, preserveItemOrder = false }: Props) {
 	const theme = useTheme();
 	const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
@@ -549,17 +757,16 @@ export default function MediaTable({ items, loading, onExclude }: Props) {
 
 	const filtered = React.useMemo(() => {
 		const q = search.toLowerCase();
-		return items
-			.filter(
-				(item) =>
-					!q ||
-					item.name.toLowerCase().includes(q) ||
-					item.genres.some((g) => g.toLowerCase().includes(q)) ||
-					(item.requestedBy ?? '').toLowerCase().includes(q) ||
-					(item.lastWatchedBy ?? '').toLowerCase().includes(q),
-			)
-			.sort(getComparator(order, orderBy));
-	}, [items, search, order, orderBy]);
+		const next = items.filter(
+			(item) =>
+				!q ||
+				item.name.toLowerCase().includes(q) ||
+				item.genres.some((g) => g.toLowerCase().includes(q)) ||
+				(item.requestedBy ?? '').toLowerCase().includes(q) ||
+				(item.lastWatchedBy ?? '').toLowerCase().includes(q),
+		);
+		return preserveItemOrder ? next : next.sort(getComparator(order, orderBy));
+	}, [items, search, order, orderBy, preserveItemOrder]);
 
 	React.useEffect(() => {
 		setOpenRows(new Set());
@@ -612,9 +819,20 @@ export default function MediaTable({ items, loading, onExclude }: Props) {
 			</Box>
 
 			{isMobile ? (
-				<MobileVirtualList items={filtered} openRows={openRows} onToggle={toggleRow} onExclude={onExclude} />
+				<MobileVirtualList items={filtered} openRows={openRows} onToggle={toggleRow} onExclude={onExclude} onMarkForRemoval={onMarkForRemoval} onMarkRemoved={onMarkRemoved} onClearRemovalMark={onClearRemovalMark} />
 			) : (
-				<DesktopVirtualList items={filtered} openRows={openRows} onToggle={toggleRow} onExclude={onExclude} orderBy={orderBy} order={order} onSort={handleSort} />
+				<DesktopVirtualList
+					items={filtered}
+					openRows={openRows}
+					onToggle={toggleRow}
+					onExclude={onExclude}
+					onMarkForRemoval={onMarkForRemoval}
+					onMarkRemoved={onMarkRemoved}
+					onClearRemovalMark={onClearRemovalMark}
+					orderBy={orderBy}
+					order={order}
+					onSort={handleSort}
+				/>
 			)}
 
 			{filtered.length === 0 && search && (

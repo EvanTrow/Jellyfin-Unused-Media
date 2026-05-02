@@ -13,6 +13,10 @@ import {
   Slider,
   TextField,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   useTheme,
   useMediaQuery,
 } from '@mui/material';
@@ -21,8 +25,11 @@ import CachedIcon from '@mui/icons-material/Cached';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import MovieIcon from '@mui/icons-material/Movie';
 import DashboardIcon from '@mui/icons-material/Dashboard';
+import LanguageIcon from '@mui/icons-material/Language';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
+import SendIcon from '@mui/icons-material/Send';
 import { useQueryClient } from '@tanstack/react-query';
-import { fetchSettings, saveSettings, clearServerCache, clearServerCacheReport } from '../services/api';
+import { fetchSettings, saveSettings, clearServerCache, clearServerCacheReport, sendDiscordIntroMessage } from '../services/api';
 import type { AppSettings } from '../services/api';
 import axios from 'axios';
 
@@ -72,6 +79,16 @@ export default function SettingsPage({ onSnackbar }: Props) {
   const [localTtl, setLocalTtl]       = React.useState<number>(4);
   const [savingTtl, setSavingTtl]     = React.useState(false);
   const [loadingSettings, setLoadingSettings] = React.useState(true);
+  const [localJellyfinPublicUrl, setLocalJellyfinPublicUrl] = React.useState('');
+  const [savingJellyfin, setSavingJellyfin] = React.useState(false);
+  const [localDiscordBotToken, setLocalDiscordBotToken] = React.useState('');
+  const [localDiscordChannelId, setLocalDiscordChannelId] = React.useState('');
+  const [discordChannelName, setDiscordChannelName] = React.useState('');
+  const [localDiscordIntroMessage, setLocalDiscordIntroMessage] = React.useState('');
+  const [discordError, setDiscordError] = React.useState<string | null>(null);
+  const [savingDiscord, setSavingDiscord] = React.useState(false);
+  const [sendingIntro, setSendingIntro] = React.useState(false);
+  const [confirmIntroOpen, setConfirmIntroOpen] = React.useState(false);
 
   // Cache stats
   const [stats, setStats]             = React.useState<ReportStat[]>([]);
@@ -84,6 +101,12 @@ export default function SettingsPage({ onSnackbar }: Props) {
       const s = await fetchSettings();
       setSettings(s);
       setLocalTtl(s.cacheTtlHours);
+      setLocalJellyfinPublicUrl(s.jellyfinPublicUrl);
+      setLocalDiscordBotToken(s.discordBotToken);
+      setLocalDiscordChannelId(s.discordChannelId);
+      setDiscordChannelName(s.discordChannelName);
+      setLocalDiscordIntroMessage(s.discordIntroMessage);
+      setDiscordError(null);
     } finally {
       setLoadingSettings(false);
     }
@@ -117,6 +140,65 @@ export default function SettingsPage({ onSnackbar }: Props) {
     }
   };
 
+  const handleSaveJellyfin = async () => {
+    setSavingJellyfin(true);
+    try {
+      const updated = await saveSettings({ jellyfinPublicUrl: localJellyfinPublicUrl });
+      setSettings(updated);
+      setLocalJellyfinPublicUrl(updated.jellyfinPublicUrl);
+      onSnackbar('Jellyfin public URL saved', 'success');
+    } catch (err: unknown) {
+      const axiosError = err as { response?: { data?: { error?: string } } };
+      onSnackbar(axiosError?.response?.data?.error ?? 'Failed to save Jellyfin settings', 'error');
+    } finally {
+      setSavingJellyfin(false);
+    }
+  };
+
+  const handleSaveDiscord = async () => {
+    setSavingDiscord(true);
+    setDiscordError(null);
+    try {
+      const updated = await saveSettings({
+        discordBotToken: localDiscordBotToken,
+        discordChannelId: localDiscordChannelId,
+        discordIntroMessage: localDiscordIntroMessage,
+      });
+      setSettings(updated);
+      setLocalDiscordBotToken(updated.discordBotToken);
+      setLocalDiscordChannelId(updated.discordChannelId);
+      setDiscordChannelName(updated.discordChannelName);
+      setLocalDiscordIntroMessage(updated.discordIntroMessage);
+      onSnackbar(updated.discordChannelId ? `Discord channel verified: #${updated.discordChannelName}` : 'Discord settings cleared', 'success');
+    } catch (err: unknown) {
+      const axiosError = err as { response?: { data?: { error?: string } } };
+      const message = axiosError?.response?.data?.error ?? 'Failed to verify Discord channel';
+      setDiscordError(message);
+      onSnackbar(message, 'error');
+    } finally {
+      setSavingDiscord(false);
+    }
+  };
+
+  const handleSendIntroMessage = async () => {
+    setSendingIntro(true);
+    try {
+      const message = localDiscordIntroMessage.trim();
+      const updated = await saveSettings({ discordIntroMessage: message });
+      setSettings(updated);
+      setLocalDiscordIntroMessage(updated.discordIntroMessage);
+      await sendDiscordIntroMessage(updated.discordIntroMessage);
+      await loadSettings();
+      onSnackbar('Discord intro message sent and pinned', 'success');
+      setConfirmIntroOpen(false);
+    } catch (err: unknown) {
+      const axiosError = err as { response?: { data?: { error?: string } } };
+      onSnackbar(axiosError?.response?.data?.error ?? 'Failed to send Discord intro message', 'error');
+    } finally {
+      setSendingIntro(false);
+    }
+  };
+
   const handleClear = async (report?: string) => {
     const key = report ?? '__all__';
     setClearing(key);
@@ -139,7 +221,19 @@ export default function SettingsPage({ onSnackbar }: Props) {
   };
 
   const isDirty = settings !== null && localTtl !== settings.cacheTtlHours;
+  const isJellyfinDirty = settings !== null && localJellyfinPublicUrl !== settings.jellyfinPublicUrl;
+  const isDiscordDirty =
+    settings !== null &&
+    (localDiscordBotToken !== settings.discordBotToken ||
+      localDiscordChannelId !== settings.discordChannelId ||
+      localDiscordIntroMessage !== settings.discordIntroMessage);
+  const canSendIntro = !!settings?.discordBotToken && !!settings.discordChannelId && localDiscordIntroMessage.trim().length > 0;
   const ttlLabel = localTtl === 0 ? 'Never expires' : `${localTtl} hour${localTtl !== 1 ? 's' : ''}`;
+  const discordHelperText = discordError
+    ? discordError
+    : discordChannelName
+      ? `Channel: #${discordChannelName}`
+      : 'Save to verify the bot can access this channel';
 
   return (
     <Box>
@@ -148,6 +242,109 @@ export default function SettingsPage({ onSnackbar }: Props) {
       </Typography>
 
       <Stack spacing={3}>
+        {/* Jellyfin */}
+        <Card variant="outlined">
+          <CardHeader
+            avatar={<LanguageIcon />}
+            title="Jellyfin"
+            subheader="Public URL used when linking to Jellyfin items outside your network"
+          />
+          <Divider />
+          <CardContent>
+            {loadingSettings ? (
+              <CircularProgress size={24} />
+            ) : (
+              <>
+                <TextField
+                  fullWidth
+                  label="Public Jellyfin URL"
+                  placeholder="https://jellyfin.example.com"
+                  value={localJellyfinPublicUrl}
+                  onChange={(e) => setLocalJellyfinPublicUrl(e.target.value)}
+                  helperText="Used to rewrite Jellyfin links sent to Discord"
+                  sx={{ mb: 2 }}
+                />
+                <Button
+                  variant="contained"
+                  disabled={!isJellyfinDirty || savingJellyfin}
+                  onClick={handleSaveJellyfin}
+                >
+                  {savingJellyfin ? 'Saving…' : 'Save'}
+                </Button>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Discord */}
+        <Card variant="outlined">
+          <CardHeader
+            avatar={<SmartToyIcon />}
+            title="Discord"
+            subheader="Bot credentials used to post removal notices"
+          />
+          <Divider />
+          <CardContent>
+            {loadingSettings ? (
+              <CircularProgress size={24} />
+            ) : (
+              <>
+                <Stack spacing={2} sx={{ mb: 2 }}>
+                  <TextField
+                    fullWidth
+                    type="password"
+                    label="Bot Token"
+                    value={localDiscordBotToken}
+                    onChange={(e) => {
+                      setLocalDiscordBotToken(e.target.value);
+                      setDiscordError(null);
+                    }}
+                    autoComplete="off"
+                  />
+                  <TextField
+                    fullWidth
+                    label="Channel ID"
+                    value={localDiscordChannelId}
+                    onChange={(e) => {
+                      setLocalDiscordChannelId(e.target.value);
+                      setDiscordError(null);
+                      if (e.target.value !== settings?.discordChannelId) setDiscordChannelName('');
+                    }}
+                    helperText={discordHelperText}
+                    error={!!discordError}
+                  />
+                  <TextField
+                    fullWidth
+                    multiline
+                    minRows={8}
+                    label="Intro Message Markdown"
+                    value={localDiscordIntroMessage}
+                    onChange={(e) => setLocalDiscordIntroMessage(e.target.value)}
+                    helperText="Markdown message posted and pinned in the configured Discord channel"
+                  />
+                </Stack>
+                <Stack direction={isMobile ? 'column' : 'row'} spacing={1.5}>
+                  <Button
+                    variant="contained"
+                    disabled={!isDiscordDirty || savingDiscord}
+                    onClick={handleSaveDiscord}
+                  >
+                    {savingDiscord ? 'Verifying…' : 'Save'}
+                  </Button>
+                  <Button
+                    variant="outlined"
+                    startIcon={<SendIcon />}
+                    disabled={!canSendIntro || savingDiscord || sendingIntro}
+                    onClick={() => setConfirmIntroOpen(true)}
+                  >
+                    {sendingIntro ? 'Sending…' : 'Send Intro Message'}
+                  </Button>
+                </Stack>
+              </>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Cache TTL */}
         <Card variant="outlined">
           <CardHeader
@@ -275,6 +472,23 @@ export default function SettingsPage({ onSnackbar }: Props) {
           </CardContent>
         </Card>
       </Stack>
+
+      <Dialog open={confirmIntroOpen} onClose={() => !sendingIntro && setConfirmIntroOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Send Discord intro message?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This will post or update the intro message in #{discordChannelName || 'the configured channel'} and pin it.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmIntroOpen(false)} disabled={sendingIntro}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={handleSendIntroMessage} disabled={sendingIntro}>
+            {sendingIntro ? 'Sending…' : 'Send and Pin'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

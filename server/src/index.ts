@@ -11,6 +11,7 @@ import sessionsRoutes from './routes/sessions';
 import proxyRoutes from './routes/proxy';
 import watchHistoryRoutes from './routes/watchHistory';
 import usersRoutes from './routes/users';
+import discordRoutes from './routes/discord';
 
 dotenv.config();
 
@@ -29,6 +30,7 @@ app.use('/api/sessions', sessionsRoutes);
 app.use('/api/proxy', proxyRoutes);
 app.use('/api/watch-history', watchHistoryRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/discord', discordRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {
