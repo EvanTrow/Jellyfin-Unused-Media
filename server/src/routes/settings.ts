@@ -112,6 +112,24 @@ router.put('/', async (req: Request, res: Response) => {
 			}
 		}
 
+		if (typeof body.discordKeepVoteEmoji === 'string') {
+			const emoji = body.discordKeepVoteEmoji.trim();
+			if (!emoji) {
+				res.status(400).json({ error: 'Keep vote emoji cannot be blank' });
+				return;
+			}
+			updated.discordKeepVoteEmoji = emoji;
+		}
+
+		if (typeof body.discordRemoveVoteEmoji === 'string') {
+			const emoji = body.discordRemoveVoteEmoji.trim();
+			if (!emoji) {
+				res.status(400).json({ error: 'Remove vote emoji cannot be blank' });
+				return;
+			}
+			updated.discordRemoveVoteEmoji = emoji;
+		}
+
 		await writeSettings(updated);
 		res.json(updated);
 	} catch (error: unknown) {

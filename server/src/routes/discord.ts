@@ -12,13 +12,48 @@ import {
 	searchDiscordGuildMembers,
 } from '../services/discord';
 import { getAllMedia } from '../services/jellyfin';
-import { readSettings, writeSettings } from '../services/settings';
+import { DEFAULT_DISCORD_KEEP_VOTE_EMOJI, DEFAULT_DISCORD_REMOVE_VOTE_EMOJI, readSettings, writeSettings } from '../services/settings';
 import { RemovalDiscordMentions, RemovalReactionSummary, MarkedRemovalItem, MediaItem } from '../types';
 
 const router = Router();
-const THUMBS_UP_EMOJI = '\u{1F44D}';
-const THUMBS_DOWN_EMOJI = '\u{1F44E}';
-const VOTE_FOOTER_TEXT = 'Vote: 👍 keep / 👎 delete';
+
+type VoteEmojiSettings = {
+	discordKeepVoteEmoji?: string;
+	discordRemoveVoteEmoji?: string;
+};
+
+type DiscordReaction = {
+	count?: number;
+	emoji: {
+		id?: string | null;
+		name: string;
+	};
+};
+
+function normalizeConfiguredVoteEmoji(value: string | undefined, fallback: string): string {
+	const emoji = value?.trim() || fallback;
+	const customEmoji = emoji.match(/^<a?:([^:>]+):(\d+)>$/);
+	return customEmoji ? `${customEmoji[1]}:${customEmoji[2]}` : emoji;
+}
+
+function getVoteEmojis(settings?: VoteEmojiSettings): { keep: string; remove: string } {
+	return {
+		keep: normalizeConfiguredVoteEmoji(settings?.discordKeepVoteEmoji, DEFAULT_DISCORD_KEEP_VOTE_EMOJI),
+		remove: normalizeConfiguredVoteEmoji(settings?.discordRemoveVoteEmoji, DEFAULT_DISCORD_REMOVE_VOTE_EMOJI),
+	};
+}
+
+function getVoteEmojiLabels(settings?: VoteEmojiSettings): { keep: string; remove: string } {
+	return {
+		keep: settings?.discordKeepVoteEmoji?.trim() || DEFAULT_DISCORD_KEEP_VOTE_EMOJI,
+		remove: settings?.discordRemoveVoteEmoji?.trim() || DEFAULT_DISCORD_REMOVE_VOTE_EMOJI,
+	};
+}
+
+function voteFooterText(settings?: VoteEmojiSettings): string {
+	const emojis = getVoteEmojiLabels(settings);
+	return `Vote: ${emojis.keep} keep / ${emojis.remove} remove`;
+}
 
 function textOrUnknown(value: string | null | undefined): string {
 	const trimmed = value?.trim();
@@ -59,7 +94,7 @@ function notificationContent(mark: MarkedRemovalItem, item: Partial<MediaItem> |
 	return `${mentions.join(' ')} ${mark.type} "${itemName}" ${status}.`;
 }
 
-function buildRemovalMessagePayload(mark: MarkedRemovalItem, item?: Partial<MediaItem>, thumbnailUrl?: string | null): Record<string, unknown> {
+function buildRemovalMessagePayload(mark: MarkedRemovalItem, item?: Partial<MediaItem>, thumbnailUrl?: string | null, settings?: VoteEmojiSettings): Record<string, unknown> {
 	const mentions = [...new Set(Object.values(mark.discordMentions ?? {}).filter((value): value is string => !!value))];
 	return {
 		content: notificationContent(mark, item, mentions),
@@ -77,23 +112,34 @@ function buildRemovalMessagePayload(mark: MarkedRemovalItem, item?: Partial<Medi
 					{ name: 'Removal Status', value: removalStatusValue(mark), inline: true },
 					{ name: 'Remove After', value: `<t:${getRemoveAtUnix(mark.removeAt)}:F>`, inline: false },
 				],
-				footer: { text: VOTE_FOOTER_TEXT },
+				footer: { text: voteFooterText(settings) },
 				timestamp: mark.markedAt,
 			},
 		],
 	};
 }
 
-function extractRemovalReactions(message: { reactions?: { count: number; emoji: { name: string } }[] }): RemovalReactionSummary {
+function reactionMatchesEmoji(reaction: DiscordReaction, configuredEmoji: string): boolean {
+	const expected = normalizeReactionEmojiName(configuredEmoji);
+	const customEmoji = expected.match(/^([^:]+):(\d+)$/);
+	const reactionName = normalizeReactionEmojiName(reaction.emoji.name);
+	const reactionId = reaction.emoji.id ? `${reactionName}:${reaction.emoji.id}` : null;
+
+	if (reactionName === expected || reactionId === expected) return true;
+	if (customEmoji && reactionName === customEmoji[1]) return true;
+	return false;
+}
+
+function extractRemovalReactions(message: { reactions?: DiscordReaction[] }, settings?: VoteEmojiSettings): RemovalReactionSummary {
+	const emojis = getVoteEmojis(settings);
 	const getCount = (emojiName: string) => {
-		const normalizedEmoji = normalizeReactionEmojiName(emojiName);
-		const reaction = message.reactions?.find((entry) => normalizeReactionEmojiName(entry.emoji.name) === normalizedEmoji);
+		const reaction = message.reactions?.find((entry) => reactionMatchesEmoji(entry, emojiName));
 		return Math.max(0, (reaction?.count ?? 0) - 1);
 	};
 
 	return {
-		thumbsUp: getCount(THUMBS_UP_EMOJI),
-		thumbsDown: getCount(THUMBS_DOWN_EMOJI),
+		thumbsUp: getCount(emojis.keep),
+		thumbsDown: getCount(emojis.remove),
 		updatedAt: new Date().toISOString(),
 	};
 }
@@ -191,9 +237,10 @@ async function matchDiscordUsers(
 	return mentions;
 }
 
-async function addVotingReactions(botToken: string, channelId: string, messageId: string): Promise<void> {
-	await addVotingReaction(botToken, channelId, messageId, THUMBS_UP_EMOJI);
-	await addVotingReaction(botToken, channelId, messageId, THUMBS_DOWN_EMOJI);
+async function addVotingReactions(botToken: string, channelId: string, messageId: string, settings?: VoteEmojiSettings): Promise<void> {
+	const emojis = getVoteEmojis(settings);
+	await addVotingReaction(botToken, channelId, messageId, emojis.keep);
+	await addVotingReaction(botToken, channelId, messageId, emojis.remove);
 }
 
 async function addVotingReaction(botToken: string, channelId: string, messageId: string, emoji: string): Promise<void> {
@@ -204,18 +251,18 @@ async function addVotingReaction(botToken: string, channelId: string, messageId:
 	}
 }
 
-async function ensureVotingReactions(botToken: string, channelId: string, messageId: string, message: { reactions?: { emoji: { name: string } }[] }): Promise<void> {
-	const reactionNames = new Set((message.reactions ?? []).map((reaction) => normalizeReactionEmojiName(reaction.emoji.name)));
-	if (!reactionNames.has(THUMBS_UP_EMOJI)) {
-		await addVotingReaction(botToken, channelId, messageId, THUMBS_UP_EMOJI);
+async function ensureVotingReactions(botToken: string, channelId: string, messageId: string, message: { reactions?: DiscordReaction[] }, settings?: VoteEmojiSettings): Promise<void> {
+	const emojis = getVoteEmojis(settings);
+	if (!(message.reactions ?? []).some((reaction) => reactionMatchesEmoji(reaction, emojis.keep))) {
+		await addVotingReaction(botToken, channelId, messageId, emojis.keep);
 	}
-	if (!reactionNames.has(THUMBS_DOWN_EMOJI)) {
-		await addVotingReaction(botToken, channelId, messageId, THUMBS_DOWN_EMOJI);
+	if (!(message.reactions ?? []).some((reaction) => reactionMatchesEmoji(reaction, emojis.remove))) {
+		await addVotingReaction(botToken, channelId, messageId, emojis.remove);
 	}
 }
 
 async function syncRemovalReactionsFromDiscord(
-	settings: { discordBotToken: string; discordChannelId: string },
+	settings: { discordBotToken: string; discordChannelId: string } & VoteEmojiSettings,
 	marks: MarkedRemovalItem[],
 ): Promise<MarkedRemovalItem[]> {
 	if (!settings.discordBotToken || !settings.discordChannelId) return marks;
@@ -226,8 +273,8 @@ async function syncRemovalReactionsFromDiscord(
 			if (!mark.discordMessageId) return mark;
 			try {
 				const message = await fetchDiscordChannelMessage(settings.discordBotToken, settings.discordChannelId, mark.discordMessageId);
-				await ensureVotingReactions(settings.discordBotToken, settings.discordChannelId, mark.discordMessageId, message);
-				const reactions = extractRemovalReactions(message);
+				await ensureVotingReactions(settings.discordBotToken, settings.discordChannelId, mark.discordMessageId, message, settings);
+				const reactions = extractRemovalReactions(message, settings);
 				if (!reactionsChanged(mark.reactions, reactions)) return mark;
 				changed = true;
 				return { ...mark, reactions };
@@ -396,8 +443,8 @@ router.post('/mark-for-removal', async (req: Request, res: Response) => {
 			discordMentions,
 		};
 
-		const message = await sendDiscordChannelMessage(settings.discordBotToken, settings.discordChannelId, buildRemovalMessagePayload(removalMark, item, thumbnailUrl));
-		await addVotingReactions(settings.discordBotToken, settings.discordChannelId, message.id);
+		const message = await sendDiscordChannelMessage(settings.discordBotToken, settings.discordChannelId, buildRemovalMessagePayload(removalMark, item, thumbnailUrl, settings));
+		await addVotingReactions(settings.discordBotToken, settings.discordChannelId, message.id, settings);
 
 		const saved = await addRemovalMark({
 			...removalMark,
@@ -428,8 +475,8 @@ router.patch('/mark-for-removal/:id/removed', async (req: Request, res: Response
 		if (settings.discordBotToken && settings.discordChannelId && updated.discordMessageId) {
 			try {
 				const message = await fetchDiscordChannelMessage(settings.discordBotToken, settings.discordChannelId, updated.discordMessageId);
-				responseItem = { ...updated, reactions: extractRemovalReactions(message) };
-				await editDiscordChannelMessage(settings.discordBotToken, settings.discordChannelId, updated.discordMessageId, buildRemovalMessagePayload(responseItem));
+				responseItem = { ...updated, reactions: extractRemovalReactions(message, settings) };
+				await editDiscordChannelMessage(settings.discordBotToken, settings.discordChannelId, updated.discordMessageId, buildRemovalMessagePayload(responseItem, undefined, undefined, settings));
 				await saveRemovalMarks((await readRemovalMarks()).map((mark) => (mark.id === responseItem.id ? responseItem : mark)));
 			} catch (error: unknown) {
 				console.warn(`Failed to update Discord removal message for "${updated.name}":`, error instanceof Error ? error.message : error);

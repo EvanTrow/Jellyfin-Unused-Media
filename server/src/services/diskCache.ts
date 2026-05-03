@@ -27,6 +27,7 @@ const content = await fs.readFile(itemPath(report, id), 'utf-8');
 const entry = JSON.parse(content) as CacheEntry<T>;
 if (typeof entry.t !== 'number' || entry.v === undefined) return null;
 const ttlMs = await getTtlMs();
+if (ttlMs === 0) return entry.v;
 if (Date.now() - entry.t > ttlMs) return null; // expired
 return entry.v;
 } catch {
@@ -39,6 +40,45 @@ const dir = path.join(CACHE_DIR, report);
 await fs.mkdir(dir, { recursive: true });
 const entry: CacheEntry<T> = { v: value, t: Date.now() };
 await fs.writeFile(itemPath(report, id), JSON.stringify(entry), 'utf-8');
+}
+
+export async function diskDelete(report: string, id: string): Promise<void> {
+try {
+await fs.rm(itemPath(report, id), { force: true });
+} catch {
+// Ignore missing or already-removed cache files.
+}
+}
+
+/** Read a cached item without applying TTL. Useful for durable historical caches. */
+export async function diskGetStored<T>(report: string, id: string): Promise<T | null> {
+try {
+const content = await fs.readFile(itemPath(report, id), 'utf-8');
+const entry = JSON.parse(content) as CacheEntry<T>;
+if (typeof entry.t !== 'number' || entry.v === undefined) return null;
+return entry.v;
+} catch {
+return null;
+}
+}
+
+/** Read every stored item in a report without applying TTL. */
+export async function diskListStored<T>(report: string): Promise<Map<string, T>> {
+const map = new Map<string, T>();
+const dir = path.join(CACHE_DIR, report);
+try {
+const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.json'));
+await Promise.all(
+files.map(async (file) => {
+const id = file.substring(0, file.length - '.json'.length);
+const value = await diskGetStored<T>(report, id);
+if (value !== null) map.set(id, value);
+})
+);
+} catch {
+// Missing cache folders simply mean there is nothing stored yet.
+}
+return map;
 }
 
 export async function diskHas(report: string, id: string): Promise<boolean> {

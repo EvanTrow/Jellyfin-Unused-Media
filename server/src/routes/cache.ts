@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { diskClear, diskStats } from '../services/diskCache';
+import { triggerCacheRefreshScan } from '../services/cacheRefresher';
 
 const router = Router();
 
@@ -17,6 +18,7 @@ router.get('/', async (_req: Request, res: Response) => {
 router.delete('/', async (_req: Request, res: Response) => {
   try {
     await diskClear();
+    triggerCacheRefreshScan('cache cleared');
     res.json({ message: 'Cache cleared' });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -28,6 +30,7 @@ router.delete('/', async (_req: Request, res: Response) => {
 router.delete('/:report', async (req: Request, res: Response) => {
   try {
     await diskClear(req.params.report);
+    triggerCacheRefreshScan(`${req.params.report} cache cleared`);
     res.json({ message: `Cache cleared for report: ${req.params.report}` });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error';

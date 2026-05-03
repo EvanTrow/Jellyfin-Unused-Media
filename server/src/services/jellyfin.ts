@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
+import { createHash } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 import {
@@ -18,11 +19,17 @@ import {
 	PlaybackReportingQueryResult,
 } from '../types';
 import { getOverseerrRequests } from './overseerr';
-import { diskGet, diskSet, diskGetBatch } from './diskCache';
+import { diskDelete, diskGet, diskSet, diskGetBatch, diskGetStored, diskListStored } from './diskCache';
 
 const REPORT_MEDIA = 'media';
 const REPORT_DASHBOARD = 'dashboard';
+const REPORT_USERS = 'users';
 const REPORT_LIBRARY_GROWTH = 'library-growth';
+const DASHBOARD_STATS_CACHE_KEY = 'stats';
+const USERS_CACHE_KEY = 'all';
+let dashboardRefreshPromise: Promise<DashboardStats> | null = null;
+let watchHistoryRefreshPromise: Promise<WatchHistoryItem[]> | null = null;
+let libraryGrowthRefreshPromise: Promise<LibraryGrowthPoint[]> | null = null;
 
 function createJellyfinClient(): AxiosInstance {
 	const baseURL = process.env.JELLYFIN_URL || 'http://localhost:8096';
@@ -73,73 +80,138 @@ async function getJellyfinServerId(client: AxiosInstance): Promise<string | null
 	return response.data.Id ?? null;
 }
 
-export async function getUsers(): Promise<JellyfinUser[]> {
+async function fetchUsersFromJellyfin(): Promise<JellyfinUser[]> {
 	const client = createJellyfinClient();
 	const response = await client.get<JellyfinUser[]>('/Users');
 	return response.data;
 }
 
+export async function getUsers(): Promise<JellyfinUser[]> {
+	const cached = await diskGet<JellyfinUser[]>(REPORT_USERS, USERS_CACHE_KEY);
+	if (cached) {
+		console.log(`[cache] users hit: ${cached.length} users`);
+		return cached;
+	}
+
+	console.log('[cache] users miss — fetching from Jellyfin');
+	try {
+		const users = await fetchUsersFromJellyfin();
+		await diskSet(REPORT_USERS, USERS_CACHE_KEY, users);
+		return users;
+	} catch (err) {
+		const stale = await diskGetStored<JellyfinUser[]>(REPORT_USERS, USERS_CACHE_KEY);
+		if (stale) {
+			console.warn('[cache] users refresh failed, using stale cache:', (err as Error).message);
+			return stale;
+		}
+		throw err;
+	}
+}
+
 // ---------------------------------------------------------------------------
-// Dashboard — hybrid: cache per library ID, always fetch fresh library list
+// Dashboard — cache the full payload first, with per-library cache as a migration fallback
 // ---------------------------------------------------------------------------
-export async function getDashboardStats(): Promise<DashboardStats> {
+async function loadDashboardStatsFromJellyfin(): Promise<DashboardStats> {
 	const client = createJellyfinClient();
 
-	const foldersResponse = await client.get<JellyfinVirtualFolder[]>('/Library/VirtualFolders');
-	const folders = foldersResponse.data ?? [];
+	try {
+		const foldersResponse = await client.get<JellyfinVirtualFolder[]>('/Library/VirtualFolders');
+		const folders = foldersResponse.data ?? [];
 
-	const cachedLibs = await diskGetBatch<LibraryStats>(
-		REPORT_DASHBOARD,
-		folders.map((f) => f.ItemId),
-	);
+		const cachedLibs = await diskGetBatch<LibraryStats>(
+			REPORT_DASHBOARD,
+			folders.map((f) => f.ItemId),
+		);
 
-	const libraries: LibraryStats[] = await Promise.all(
-		folders.map(async (folder): Promise<LibraryStats> => {
-			// Return cached stats if we have them
-			const cached = cachedLibs.get(folder.ItemId);
-			if (cached) {
-				console.log(`[cache] dashboard hit: ${folder.Name}`);
-				return cached;
-			}
+		const libraries: LibraryStats[] = await Promise.all(
+			folders.map(async (folder): Promise<LibraryStats> => {
+				// Return cached stats if we have them
+				const cached = cachedLibs.get(folder.ItemId);
+				if (cached) {
+					console.log(`[cache] dashboard library hit: ${folder.Name}`);
+					return cached;
+				}
 
-			console.log(`[cache] dashboard miss: ${folder.Name} — fetching from Jellyfin`);
-			const parentId = folder.ItemId;
-			const base = { recursive: true, parentId, enableTotalRecordCount: true };
-			const ct = (folder.CollectionType ?? '').toLowerCase();
+				console.log(`[cache] dashboard library miss: ${folder.Name} — fetching from Jellyfin`);
+				const parentId = folder.ItemId;
+				const base = { recursive: true, parentId, enableTotalRecordCount: true };
+				const ct = (folder.CollectionType ?? '').toLowerCase();
 
-			const [movies, series, seasons, episodes] = await Promise.all([
-				ct === 'movies' || ct === 'mixed' ? fetchCount(client, { ...base, includeItemTypes: 'Movie' }) : Promise.resolve(0),
-				ct === 'tvshows' || ct === 'mixed' ? fetchCount(client, { ...base, includeItemTypes: 'Series' }) : Promise.resolve(0),
-				ct === 'tvshows' || ct === 'mixed' ? fetchCount(client, { ...base, includeItemTypes: 'Season' }) : Promise.resolve(0),
-				ct === 'tvshows' || ct === 'mixed' ? fetchCount(client, { ...base, includeItemTypes: 'Episode' }) : Promise.resolve(0),
-			]);
+				const [movies, series, seasons, episodes] = await Promise.all([
+					ct === 'movies' || ct === 'mixed' ? fetchCount(client, { ...base, includeItemTypes: 'Movie' }) : Promise.resolve(0),
+					ct === 'tvshows' || ct === 'mixed' ? fetchCount(client, { ...base, includeItemTypes: 'Series' }) : Promise.resolve(0),
+					ct === 'tvshows' || ct === 'mixed' ? fetchCount(client, { ...base, includeItemTypes: 'Season' }) : Promise.resolve(0),
+					ct === 'tvshows' || ct === 'mixed' ? fetchCount(client, { ...base, includeItemTypes: 'Episode' }) : Promise.resolve(0),
+				]);
 
-			const stats: LibraryStats = {
-				id: parentId,
-				name: folder.Name,
-				collectionType: folder.CollectionType ?? '',
-				movies,
-				series,
-				seasons,
-				episodes,
-			};
+				const stats: LibraryStats = {
+					id: parentId,
+					name: folder.Name,
+					collectionType: folder.CollectionType ?? '',
+					movies,
+					series,
+					seasons,
+					episodes,
+				};
 
-			await diskSet(REPORT_DASHBOARD, folder.ItemId, stats);
-			return stats;
-		}),
-	);
+				await diskSet(REPORT_DASHBOARD, folder.ItemId, stats);
+				return stats;
+			}),
+		);
 
-	const totals = libraries.reduce(
-		(acc, lib) => ({
-			movies: acc.movies + lib.movies,
-			series: acc.series + lib.series,
-			seasons: acc.seasons + lib.seasons,
-			episodes: acc.episodes + lib.episodes,
-		}),
-		{ movies: 0, series: 0, seasons: 0, episodes: 0 },
-	);
+		const totals = libraries.reduce(
+			(acc, lib) => ({
+				movies: acc.movies + lib.movies,
+				series: acc.series + lib.series,
+				seasons: acc.seasons + lib.seasons,
+				episodes: acc.episodes + lib.episodes,
+			}),
+			{ movies: 0, series: 0, seasons: 0, episodes: 0 },
+		);
 
-	return { libraries, totals };
+		const stats = { libraries, totals };
+		await diskSet(REPORT_DASHBOARD, DASHBOARD_STATS_CACHE_KEY, stats);
+		return stats;
+	} catch (err) {
+		const staleStats = await diskGetStored<DashboardStats>(REPORT_DASHBOARD, DASHBOARD_STATS_CACHE_KEY);
+		if (staleStats) {
+			console.warn('[cache] dashboard refresh failed, using stale cache:', (err as Error).message);
+			return staleStats;
+		}
+		throw err;
+	}
+}
+
+export function refreshDashboardStats(): Promise<DashboardStats> {
+	if (!dashboardRefreshPromise) {
+		dashboardRefreshPromise = loadDashboardStatsFromJellyfin().finally(() => {
+			dashboardRefreshPromise = null;
+		});
+	}
+	return dashboardRefreshPromise;
+}
+
+export async function isDashboardStatsCacheExpired(): Promise<boolean> {
+	return (await diskGet<DashboardStats>(REPORT_DASHBOARD, DASHBOARD_STATS_CACHE_KEY)) === null;
+}
+
+export async function getDashboardStats(): Promise<DashboardStats> {
+	const cachedStats = await diskGet<DashboardStats>(REPORT_DASHBOARD, DASHBOARD_STATS_CACHE_KEY);
+	if (cachedStats) {
+		console.log(`[cache] dashboard hit: ${cachedStats.libraries.length} libraries`);
+		return cachedStats;
+	}
+
+	const staleStats = await diskGetStored<DashboardStats>(REPORT_DASHBOARD, DASHBOARD_STATS_CACHE_KEY);
+	if (staleStats) {
+		console.log(`[cache] dashboard stale hit: ${staleStats.libraries.length} libraries; refresh queued`);
+		void refreshDashboardStats().catch((err) => {
+			console.warn('[cache] dashboard background refresh failed:', (err as Error).message);
+		});
+		return staleStats;
+	}
+
+	return refreshDashboardStats();
 }
 
 // ---------------------------------------------------------------------------
@@ -481,35 +553,111 @@ export async function getNowPlaying(): Promise<NowPlayingSession[]> {
 // ---------------------------------------------------------------------------
 
 const REPORT_WATCH_HISTORY = 'watch-history';
-const WATCH_HISTORY_CACHE_KEY = 'all';
-const LIBRARY_GROWTH_CACHE_KEY = 'all';
+const WATCH_HISTORY_MANIFEST_KEY = 'manifest';
+const WATCH_HISTORY_LEGACY_CACHE_KEY = 'all';
+const LIBRARY_GROWTH_MANIFEST_KEY = 'manifest';
+const LIBRARY_GROWTH_LEGACY_CACHE_KEY = 'all';
 const MIN_DURATION_SECONDS = 3 * 60; // 3 minutes
 const MERGE_WINDOW_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
-	const cached = await diskGet<WatchHistoryItem[]>(REPORT_WATCH_HISTORY, WATCH_HISTORY_CACHE_KEY);
-	if (cached) {
-		console.log('[cache] watch-history hit');
-		return cached;
-	}
+interface WatchHistoryManifest {
+	version: 1;
+	lastCheckedAt: string;
+	generation: string;
+}
 
-	console.log('[cache] watch-history miss — querying PlaybackActivity');
-	const client = createJellyfinClient();
+interface WatchHistoryRawRow {
+	cacheId: string;
+	dateCreated: string;
+	dateCreatedSql: string;
+	userId: string;
+	playDuration: number;
+	itemId: string;
+	itemType: string;
+	itemName: string;
+}
 
-	// Query all playback records from the reporting plugin's SQLite database
-	const customQuery = 'SELECT DateCreated, UserId, CAST(PlayDuration AS INTEGER) AS PlayDuration, ItemId, ItemType, ItemName ' + 'FROM PlaybackActivity ' + 'ORDER BY DateCreated ASC';
+type MergedWatchHistorySession = {
+	userId: string;
+	itemId: string;
+	itemType: string;
+	itemName: string;
+	startDate: Date;
+	totalDuration: number;
+};
 
-	type RawRow = {
-		dateCreated: Date;
-		userId: string;
-		playDuration: number;
-		itemId: string;
-		itemType: string;
-		itemName: string;
-	};
+interface CachedWatchHistoryItem extends WatchHistoryItem {
+	cacheId: string;
+	cacheGeneration: string;
+}
 
-	let rawRows: RawRow[] = [];
+function isObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
+}
 
+function stableCacheKey(prefix: string, value: string): string {
+	return `${prefix}-${createHash('sha1').update(value).digest('hex')}`;
+}
+
+function playbackActivitySqlDate(date: Date): string {
+	return date.toISOString().substring(0, 19).replace('T', ' ');
+}
+
+function parsePlaybackActivityDate(rawDate: string): Date {
+	return new Date(rawDate.replace(' ', 'T') + 'Z');
+}
+
+function isWatchHistoryRawRow(value: unknown): value is WatchHistoryRawRow {
+	return (
+		isObject(value) &&
+		typeof value.cacheId === 'string' &&
+		typeof value.dateCreated === 'string' &&
+		typeof value.dateCreatedSql === 'string' &&
+		typeof value.userId === 'string' &&
+		typeof value.playDuration === 'number' &&
+		typeof value.itemId === 'string' &&
+		typeof value.itemType === 'string' &&
+		typeof value.itemName === 'string'
+	);
+}
+
+function isCachedWatchHistoryItem(value: unknown): value is CachedWatchHistoryItem {
+	return (
+		isObject(value) &&
+		typeof value.cacheId === 'string' &&
+		typeof value.cacheGeneration === 'string' &&
+		typeof value.itemId === 'string' &&
+		typeof value.userId === 'string' &&
+		typeof value.playbackStartDate === 'string' &&
+		typeof value.playbackDurationMinutes === 'number'
+	);
+}
+
+function toWatchHistoryItem(item: CachedWatchHistoryItem): WatchHistoryItem {
+	const { cacheId: _cacheId, cacheGeneration: _cacheGeneration, ...rest } = item;
+	return rest;
+}
+
+function watchHistoryItemCacheKey(item: WatchHistoryItem): string {
+	return stableCacheKey('history', JSON.stringify([item.playbackStartDate, item.userId, item.itemId, item.playbackDurationMinutes]));
+}
+
+function watchHistorySessionCacheKey(session: MergedWatchHistorySession): string {
+	return stableCacheKey('history', JSON.stringify([session.startDate.toISOString(), session.userId, session.itemId, Math.round(session.totalDuration / 60)]));
+}
+
+function latestWatchHistorySqlDate(rows: WatchHistoryRawRow[]): string | null {
+	return rows.reduce<string | null>((latest, row) => {
+		if (!latest || row.dateCreatedSql > latest) return row.dateCreatedSql;
+		return latest;
+	}, null);
+}
+
+async function fetchWatchHistoryRawRows(client: AxiosInstance, sinceSqlDate: string | null): Promise<WatchHistoryRawRow[]> {
+	const where = sinceSqlDate ? ` WHERE DateCreated >= '${sinceSqlDate.replace(/'/g, "''")}'` : '';
+	const customQuery = 'SELECT DateCreated, UserId, CAST(PlayDuration AS INTEGER) AS PlayDuration, ItemId, ItemType, ItemName ' + 'FROM PlaybackActivity' + where + ' ORDER BY DateCreated ASC';
+
+	const rawRows: WatchHistoryRawRow[] = [];
 	try {
 		const resp = await client.post<PlaybackReportingQueryResult>('/user_usage_stats/submit_custom_query', {
 			CustomQueryString: customQuery,
@@ -529,9 +677,9 @@ export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
 		const iItemName = ci('ItemName');
 
 		for (const row of rows) {
-			const rawDate = row[iDate] as string;
+			const rawDate = String(row[iDate] ?? '');
 			// Plugin stores dates as "YYYY-MM-DD HH:MM:SS" UTC
-			const dateCreated = new Date(rawDate.replace(' ', 'T') + 'Z');
+			const dateCreated = parsePlaybackActivityDate(rawDate);
 			const userId = (row[iUser] as string) ?? '';
 			const playDuration = Number(row[iDur] ?? 0);
 			const itemId = (row[iItemId] as string) ?? '';
@@ -540,32 +688,27 @@ export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
 
 			if (!userId || !itemId) continue;
 
-			rawRows.push({ dateCreated, userId, playDuration, itemId, itemType, itemName });
+			const dateCreatedSql = playbackActivitySqlDate(dateCreated);
+			const cacheId = stableCacheKey('raw', JSON.stringify([dateCreatedSql, userId, playDuration, itemId, itemType, itemName]));
+			rawRows.push({ cacheId, dateCreated: dateCreated.toISOString(), dateCreatedSql, userId, playDuration, itemId, itemType, itemName });
 		}
 	} catch (err: unknown) {
 		const e = err as { response?: { status?: number }; message?: string };
 		console.error('[watch-history] PlaybackActivity query failed:', e?.response?.status, e?.message);
-		return [];
+		throw err;
 	}
 
-	// --- Merge sessions: same userId+itemId within 12-hour window ---
-	// dateCreated from plugin is end-of-session; compute session start = dateCreated - duration
-	type MergedSession = {
-		userId: string;
-		itemId: string;
-		itemType: string;
-		itemName: string;
-		startDate: Date;
-		totalDuration: number;
-	};
+	return rawRows;
+}
 
-	const merged: MergedSession[] = [];
+function mergeWatchHistoryRows(rawRows: WatchHistoryRawRow[]): MergedWatchHistorySession[] {
+	const merged: MergedWatchHistorySession[] = [];
+	const sortedRows = [...rawRows].sort((a, b) => a.dateCreated.localeCompare(b.dateCreated));
 
-	for (const row of rawRows) {
-		const sessionStart = new Date(row.dateCreated.getTime() - row.playDuration * 1000);
-
-		// Find the most recent existing session for the same user+item within 12h
-		let found: MergedSession | undefined;
+	for (const row of sortedRows) {
+		// dateCreated from plugin is end-of-session; compute session start = dateCreated - duration
+		const sessionStart = new Date(new Date(row.dateCreated).getTime() - row.playDuration * 1000);
+		let found: MergedWatchHistorySession | undefined;
 		for (let i = merged.length - 1; i >= 0; i--) {
 			const m = merged[i];
 			if (m.userId === row.userId && m.itemId === row.itemId) {
@@ -590,11 +733,12 @@ export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
 		}
 	}
 
-	// Filter out plays shorter than 3 minutes, then sort newest first
-	const filtered = merged.filter((m) => m.totalDuration >= MIN_DURATION_SECONDS).sort((a, b) => b.startDate.getTime() - a.startDate.getTime());
+	return merged.filter((m) => m.totalDuration >= MIN_DURATION_SECONDS).sort((a, b) => b.startDate.getTime() - a.startDate.getTime());
+}
 
+async function renderWatchHistoryItems(client: AxiosInstance, sessions: MergedWatchHistorySession[]): Promise<WatchHistoryItem[]> {
 	// Fetch Jellyfin item metadata in batches of 50
-	const uniqueItemIds = [...new Set(filtered.map((m) => m.itemId))];
+	const uniqueItemIds = [...new Set(sessions.map((m) => m.itemId))];
 	const itemMetaMap = new Map<string, JellyfinItem>();
 
 	for (let i = 0; i < uniqueItemIds.length; i += 50) {
@@ -614,11 +758,11 @@ export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
 		}
 	}
 
-	// Build user ID → name map
+	// Build user ID → name map from the server-side users cache.
 	const users = await getUsers();
 	const userMap = new Map(users.map((u) => [u.Id, u.Name]));
 
-	const results: WatchHistoryItem[] = filtered.map((m) => {
+	return sessions.map((m) => {
 		const item = itemMetaMap.get(m.itemId);
 		const runtimeTicks = item?.RunTimeTicks ?? 0;
 
@@ -644,10 +788,135 @@ export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
 			playbackDurationMinutes: Math.round(m.totalDuration / 60),
 		};
 	});
+}
 
-	await diskSet(REPORT_WATCH_HISTORY, WATCH_HISTORY_CACHE_KEY, results);
-	console.log(`[cache] watch-history cached ${results.length} items`);
-	return results;
+function sortWatchHistoryItems(items: WatchHistoryItem[]): WatchHistoryItem[] {
+	return [...items].sort((a, b) => b.playbackStartDate.localeCompare(a.playbackStartDate));
+}
+
+function cachedWatchHistoryItemsFromStored(stored: Map<string, unknown>): WatchHistoryItem[] {
+	return [...stored.values()].filter(isCachedWatchHistoryItem).map(toWatchHistoryItem);
+}
+
+async function loadWatchHistoryFromJellyfin(): Promise<WatchHistoryItem[]> {
+	const stored = await diskListStored<unknown>(REPORT_WATCH_HISTORY);
+	const rawRowsById = new Map([...stored.values()].filter(isWatchHistoryRawRow).map((row): [string, WatchHistoryRawRow] => [row.cacheId, row]));
+	const renderedEntries = [...stored.entries()].filter((entry): entry is [string, CachedWatchHistoryItem] => isCachedWatchHistoryItem(entry[1]));
+
+	const sinceSqlDate = latestWatchHistorySqlDate([...rawRowsById.values()]);
+	console.log(sinceSqlDate ? `[cache] watch-history stale — querying PlaybackActivity from ${sinceSqlDate}` : '[cache] watch-history miss — querying PlaybackActivity');
+
+	const client = createJellyfinClient();
+
+	try {
+		const freshRows = await fetchWatchHistoryRawRows(client, sinceSqlDate);
+		const newRows = freshRows.filter((row) => !rawRowsById.has(row.cacheId));
+
+		await Promise.all(
+			newRows.map(async (row) => {
+				rawRowsById.set(row.cacheId, row);
+				await diskSet(REPORT_WATCH_HISTORY, row.cacheId, row);
+			}),
+		);
+
+		const sessions = mergeWatchHistoryRows([...rawRowsById.values()]);
+		const sessionKeys = new Set(sessions.map(watchHistorySessionCacheKey));
+		const renderedByKey = new Map(renderedEntries);
+		const cachedResults: WatchHistoryItem[] = [];
+		const sessionsToRender: MergedWatchHistorySession[] = [];
+
+		for (const session of sessions) {
+			const cacheId = watchHistorySessionCacheKey(session);
+			const cachedItem = renderedByKey.get(cacheId);
+			if (cachedItem) {
+				cachedResults.push(toWatchHistoryItem(cachedItem));
+			} else {
+				sessionsToRender.push(session);
+			}
+		}
+
+		await Promise.all(
+			renderedEntries
+				.filter(([key]) => !sessionKeys.has(key))
+				.map(([key]) => diskDelete(REPORT_WATCH_HISTORY, key)),
+		);
+
+		const renderedFresh = sessionsToRender.length > 0 ? await renderWatchHistoryItems(client, sessionsToRender) : [];
+		const generation = new Date().toISOString();
+		await Promise.all(
+			renderedFresh.map(async (item) => {
+				const cacheId = watchHistoryItemCacheKey(item);
+				const cachedItem: CachedWatchHistoryItem = { ...item, cacheId, cacheGeneration: generation };
+				await diskSet(REPORT_WATCH_HISTORY, cacheId, cachedItem);
+			}),
+		);
+		await diskSet<WatchHistoryManifest>(REPORT_WATCH_HISTORY, WATCH_HISTORY_MANIFEST_KEY, {
+			version: 1,
+			lastCheckedAt: generation,
+			generation,
+		});
+
+		const results = sortWatchHistoryItems([...cachedResults, ...renderedFresh]);
+		console.log(`[cache] watch-history refreshed ${newRows.length} new rows; rendered ${renderedFresh.length} new/changed items; ${cachedResults.length} item hits`);
+		return results;
+	} catch (err) {
+		const cachedItems = renderedEntries.map(([, item]) => toWatchHistoryItem(item));
+		if (cachedItems.length > 0) {
+			console.warn('[cache] watch-history refresh failed, using cached rendered items:', (err as Error).message);
+			return sortWatchHistoryItems(cachedItems);
+		}
+
+		const legacy = await diskGetStored<WatchHistoryItem[]>(REPORT_WATCH_HISTORY, WATCH_HISTORY_LEGACY_CACHE_KEY);
+		if (Array.isArray(legacy)) {
+			console.warn('[cache] watch-history refresh failed, using legacy aggregate cache:', (err as Error).message);
+			return legacy;
+		}
+
+		throw err;
+	}
+}
+
+export function refreshWatchHistory(): Promise<WatchHistoryItem[]> {
+	if (!watchHistoryRefreshPromise) {
+		watchHistoryRefreshPromise = loadWatchHistoryFromJellyfin().finally(() => {
+			watchHistoryRefreshPromise = null;
+		});
+	}
+	return watchHistoryRefreshPromise;
+}
+
+export async function isWatchHistoryCacheExpired(): Promise<boolean> {
+	return (await diskGet<WatchHistoryManifest>(REPORT_WATCH_HISTORY, WATCH_HISTORY_MANIFEST_KEY)) === null;
+}
+
+export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
+	const stored = await diskListStored<unknown>(REPORT_WATCH_HISTORY);
+	const manifest = await diskGet<WatchHistoryManifest>(REPORT_WATCH_HISTORY, WATCH_HISTORY_MANIFEST_KEY);
+	const cachedItems = cachedWatchHistoryItemsFromStored(stored);
+
+	if (manifest && cachedItems.length > 0) {
+		console.log(`[cache] watch-history hit: ${cachedItems.length} cached items`);
+		return sortWatchHistoryItems(cachedItems);
+	}
+
+	if (cachedItems.length > 0) {
+		console.log(`[cache] watch-history stale hit: ${cachedItems.length} cached items; refresh queued`);
+		void refreshWatchHistory().catch((err) => {
+			console.warn('[cache] watch-history background refresh failed:', (err as Error).message);
+		});
+		return sortWatchHistoryItems(cachedItems);
+	}
+
+	const legacy = await diskGetStored<WatchHistoryItem[]>(REPORT_WATCH_HISTORY, WATCH_HISTORY_LEGACY_CACHE_KEY);
+	if (Array.isArray(legacy) && legacy.length > 0) {
+		console.log(`[cache] watch-history legacy hit: ${legacy.length} cached items; refresh queued`);
+		void refreshWatchHistory().catch((err) => {
+			console.warn('[cache] watch-history background refresh failed:', (err as Error).message);
+		});
+		return sortWatchHistoryItems(legacy);
+	}
+
+	return refreshWatchHistory();
 }
 
 // ---------------------------------------------------------------------------
@@ -659,59 +928,209 @@ function itemSizeBytes(item: JellyfinItem): number {
 	return item.Size ?? 0;
 }
 
-export async function getLibraryGrowth(): Promise<LibraryGrowthPoint[]> {
-	const cached = await diskGet<LibraryGrowthPoint[]>(REPORT_LIBRARY_GROWTH, LIBRARY_GROWTH_CACHE_KEY);
-	if (cached) {
-		console.log('[cache] library-growth hit');
-		return cached;
-	}
+interface LibraryGrowthItemSnapshot {
+	id: string;
+	type: string;
+	dateCreated: string;
+	sizeBytes: number;
+}
 
-	console.log('[cache] library-growth miss — fetching from Jellyfin');
-	const client = createJellyfinClient();
+interface LibraryGrowthManifest {
+	version: 1;
+	lastCheckedAt: string;
+}
 
-	// Include major file-backed item types so total reflects the whole library.
-	// TV is still represented by Episodes for per-series curve, while total includes all.
-	const mediaItems = await fetchAllItems(client, '/Items', {
-		recursive: true,
-		includeItemTypes: 'Movie,Episode,Audio,MusicVideo,Video,Book',
-		fields: 'DateCreated,MediaSources,Size',
-		enableTotalRecordCount: false,
-	});
+const LIBRARY_GROWTH_ITEM_TYPES = 'Movie,Episode,Audio,MusicVideo,Video,Book';
+const LIBRARY_GROWTH_ITEM_FIELDS = 'DateCreated,MediaSources,Size';
 
-	// Accumulate bytes per day
+function libraryGrowthItemCacheKey(itemId: string): string {
+	return `item-${itemId}`;
+}
+
+function toLibraryGrowthSnapshot(item: JellyfinItem): LibraryGrowthItemSnapshot | null {
+	if (!item.Id || !item.DateCreated) return null;
+	return {
+		id: item.Id,
+		type: item.Type,
+		dateCreated: item.DateCreated,
+		sizeBytes: itemSizeBytes(item),
+	};
+}
+
+function isLibraryGrowthSnapshot(value: unknown): value is LibraryGrowthItemSnapshot {
+	return isObject(value) && typeof value.id === 'string' && typeof value.type === 'string' && typeof value.dateCreated === 'string' && typeof value.sizeBytes === 'number';
+}
+
+function latestLibraryGrowthDate(items: LibraryGrowthItemSnapshot[]): string | null {
+	return items.reduce<string | null>((latest, item) => {
+		if (!latest || item.dateCreated > latest) return item.dateCreated;
+		return latest;
+	}, null);
+}
+
+function buildLibraryGrowthPoints(items: LibraryGrowthItemSnapshot[]): LibraryGrowthPoint[] {
 	const moviesByDate = new Map<string, number>();
 	const seriesByDate = new Map<string, number>();
 	const totalByDate = new Map<string, number>();
 
-	for (const item of mediaItems) {
-		if (!item.DateCreated) continue;
-		const day = item.DateCreated.substring(0, 10);
-		const bytes = itemSizeBytes(item);
+	for (const item of items) {
+		const day = item.dateCreated.substring(0, 10);
+		const bytes = item.sizeBytes;
 		if (bytes <= 0) continue;
 
 		totalByDate.set(day, (totalByDate.get(day) ?? 0) + bytes);
-		if (item.Type === 'Movie') {
+		if (item.type === 'Movie') {
 			moviesByDate.set(day, (moviesByDate.get(day) ?? 0) + bytes);
-		} else if (item.Type === 'Episode') {
+		} else if (item.type === 'Episode') {
 			seriesByDate.set(day, (seriesByDate.get(day) ?? 0) + bytes);
 		}
 	}
 
-	// Collect all unique dates and sort ascending
 	const allDates = [...new Set([...totalByDate.keys(), ...moviesByDate.keys(), ...seriesByDate.keys()])].sort();
 
-	// Build cumulative series
 	let cumMovies = 0;
 	let cumSeries = 0;
 	let cumTotal = 0;
-	const points: LibraryGrowthPoint[] = allDates.map((date) => {
+	return allDates.map((date) => {
 		cumMovies += moviesByDate.get(date) ?? 0;
 		cumSeries += seriesByDate.get(date) ?? 0;
 		cumTotal += totalByDate.get(date) ?? 0;
 		return { date, movies: cumMovies, series: cumSeries, total: cumTotal };
 	});
+}
 
-	await diskSet(REPORT_LIBRARY_GROWTH, LIBRARY_GROWTH_CACHE_KEY, points);
-	console.log(`[cache] library-growth cached ${points.length} points`);
-	return points;
+async function fetchLibraryGrowthSnapshots(client: AxiosInstance, cachedById: Map<string, LibraryGrowthItemSnapshot>): Promise<LibraryGrowthItemSnapshot[]> {
+	const cachedItems = [...cachedById.values()];
+	const newestCachedDate = latestLibraryGrowthDate(cachedItems);
+	const snapshots: LibraryGrowthItemSnapshot[] = [];
+	let startIndex = 0;
+	const limit = 500;
+	let reachedCachedItems = false;
+
+	while (true) {
+		const response = await client.get<JellyfinQueryResult>('/Items', {
+			params: {
+				recursive: true,
+				includeItemTypes: LIBRARY_GROWTH_ITEM_TYPES,
+				fields: LIBRARY_GROWTH_ITEM_FIELDS,
+				sortBy: 'DateCreated',
+				sortOrder: 'Descending',
+				enableTotalRecordCount: false,
+				startIndex,
+				limit,
+			},
+		});
+
+		const items = response.data.Items ?? [];
+		if (items.length === 0) break;
+
+		for (const item of items) {
+			if (!item.DateCreated) continue;
+
+			if (newestCachedDate && item.DateCreated < newestCachedDate) {
+				reachedCachedItems = true;
+				continue;
+			}
+
+			const snapshot = toLibraryGrowthSnapshot(item);
+			if (!snapshot) continue;
+
+			const cached = cachedById.get(snapshot.id);
+			if (cached && cached.dateCreated === snapshot.dateCreated && cached.type === snapshot.type && cached.sizeBytes === snapshot.sizeBytes) {
+				continue;
+			}
+
+			snapshots.push(snapshot);
+		}
+
+		if (reachedCachedItems || items.length < limit) break;
+		startIndex += limit;
+	}
+
+	return snapshots;
+}
+
+async function loadLibraryGrowthFromJellyfin(): Promise<LibraryGrowthPoint[]> {
+	const storedSnapshots = await diskListStored<unknown>(REPORT_LIBRARY_GROWTH);
+	const cachedById = new Map([...storedSnapshots.values()].filter(isLibraryGrowthSnapshot).map((item): [string, LibraryGrowthItemSnapshot] => [item.id, item]));
+
+	const newestCachedDate = latestLibraryGrowthDate([...cachedById.values()]);
+	console.log(newestCachedDate ? `[cache] library-growth stale — fetching items newer than ${newestCachedDate}` : '[cache] library-growth miss — fetching item snapshots from Jellyfin');
+
+	const client = createJellyfinClient();
+
+	try {
+		const freshSnapshots = await fetchLibraryGrowthSnapshots(client, cachedById);
+
+		await Promise.all(
+			freshSnapshots.map(async (item) => {
+				cachedById.set(item.id, item);
+				await diskSet(REPORT_LIBRARY_GROWTH, libraryGrowthItemCacheKey(item.id), item);
+			}),
+		);
+
+		await diskSet<LibraryGrowthManifest>(REPORT_LIBRARY_GROWTH, LIBRARY_GROWTH_MANIFEST_KEY, {
+			version: 1,
+			lastCheckedAt: new Date().toISOString(),
+		});
+
+		console.log(`[cache] library-growth refreshed ${freshSnapshots.length} items; ${cachedById.size} cached total`);
+		return buildLibraryGrowthPoints([...cachedById.values()]);
+	} catch (err) {
+		if (cachedById.size > 0) {
+			console.warn('[cache] library-growth refresh failed, using cached item snapshots:', (err as Error).message);
+			return buildLibraryGrowthPoints([...cachedById.values()]);
+		}
+
+		const legacy = await diskGetStored<LibraryGrowthPoint[]>(REPORT_LIBRARY_GROWTH, LIBRARY_GROWTH_LEGACY_CACHE_KEY);
+		if (legacy) {
+			console.warn('[cache] library-growth refresh failed, using legacy aggregate cache:', (err as Error).message);
+			return legacy;
+		}
+
+		throw err;
+	}
+}
+
+export function refreshLibraryGrowth(): Promise<LibraryGrowthPoint[]> {
+	if (!libraryGrowthRefreshPromise) {
+		libraryGrowthRefreshPromise = loadLibraryGrowthFromJellyfin().finally(() => {
+			libraryGrowthRefreshPromise = null;
+		});
+	}
+	return libraryGrowthRefreshPromise;
+}
+
+export async function isLibraryGrowthCacheExpired(): Promise<boolean> {
+	return (await diskGet<LibraryGrowthManifest>(REPORT_LIBRARY_GROWTH, LIBRARY_GROWTH_MANIFEST_KEY)) === null;
+}
+
+export async function getLibraryGrowth(): Promise<LibraryGrowthPoint[]> {
+	const storedSnapshots = await diskListStored<unknown>(REPORT_LIBRARY_GROWTH);
+	const cachedById = new Map([...storedSnapshots.values()].filter(isLibraryGrowthSnapshot).map((item): [string, LibraryGrowthItemSnapshot] => [item.id, item]));
+	const manifest = await diskGet<LibraryGrowthManifest>(REPORT_LIBRARY_GROWTH, LIBRARY_GROWTH_MANIFEST_KEY);
+
+	if (manifest && cachedById.size > 0) {
+		console.log(`[cache] library-growth hit: ${cachedById.size} cached items`);
+		return buildLibraryGrowthPoints([...cachedById.values()]);
+	}
+
+	if (cachedById.size > 0) {
+		console.log(`[cache] library-growth stale hit: ${cachedById.size} cached items; refresh queued`);
+		void refreshLibraryGrowth().catch((err) => {
+			console.warn('[cache] library-growth background refresh failed:', (err as Error).message);
+		});
+		return buildLibraryGrowthPoints([...cachedById.values()]);
+	}
+
+	const legacy = await diskGetStored<LibraryGrowthPoint[]>(REPORT_LIBRARY_GROWTH, LIBRARY_GROWTH_LEGACY_CACHE_KEY);
+	if (Array.isArray(legacy) && legacy.length > 0) {
+		console.log(`[cache] library-growth legacy hit: ${legacy.length} cached points; refresh queued`);
+		void refreshLibraryGrowth().catch((err) => {
+			console.warn('[cache] library-growth background refresh failed:', (err as Error).message);
+		});
+		return legacy;
+	}
+
+	return refreshLibraryGrowth();
 }

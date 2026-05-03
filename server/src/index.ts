@@ -12,6 +12,7 @@ import proxyRoutes from './routes/proxy';
 import watchHistoryRoutes from './routes/watchHistory';
 import usersRoutes from './routes/users';
 import discordRoutes from './routes/discord';
+import { startCacheRefresher } from './services/cacheRefresher';
 
 dotenv.config();
 
@@ -52,4 +53,5 @@ if (process.env.NODE_ENV === 'production') {
 app.listen(PORT, () => {
 	console.log(`🎬 Jellyfin Reports server running on http://localhost:${PORT}`);
 	console.log(`   Jellyfin URL: ${process.env.JELLYFIN_URL || 'not configured'}`);
+	startCacheRefresher();
 });
