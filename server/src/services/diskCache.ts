@@ -27,6 +27,7 @@ const content = await fs.readFile(itemPath(report, id), 'utf-8');
 const entry = JSON.parse(content) as CacheEntry<T>;
 if (typeof entry.t !== 'number' || entry.v === undefined) return null;
 const ttlMs = await getTtlMs();
+if (ttlMs === 0) return entry.v;
 if (Date.now() - entry.t > ttlMs) return null; // expired
 return entry.v;
 } catch {
