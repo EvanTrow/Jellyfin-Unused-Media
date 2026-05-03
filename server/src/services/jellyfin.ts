@@ -571,6 +571,10 @@ function watchHistoryItemCacheKey(item: WatchHistoryItem): string {
 	return stableCacheKey('history', JSON.stringify([item.playbackStartDate, item.userId, item.itemId, item.playbackDurationMinutes]));
 }
 
+function watchHistorySessionCacheKey(session: MergedWatchHistorySession): string {
+	return stableCacheKey('history', JSON.stringify([session.startDate.toISOString(), session.userId, session.itemId, Math.round(session.totalDuration / 60)]));
+}
+
 function latestWatchHistorySqlDate(rows: WatchHistoryRawRow[]): string | null {
 	return rows.reduce<string | null>((latest, row) => {
 		if (!latest || row.dateCreatedSql > latest) return row.dateCreatedSql;
@@ -720,9 +724,7 @@ export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
 	const stored = await diskListStored<unknown>(REPORT_WATCH_HISTORY);
 	const rawRowsById = new Map([...stored.values()].filter(isWatchHistoryRawRow).map((row): [string, WatchHistoryRawRow] => [row.cacheId, row]));
 	const manifest = await diskGet<WatchHistoryManifest>(REPORT_WATCH_HISTORY, WATCH_HISTORY_MANIFEST_KEY);
-	const renderedEntries = [...stored.entries()]
-		.filter((entry): entry is [string, CachedWatchHistoryItem] => isCachedWatchHistoryItem(entry[1]))
-		.filter(([, item]) => item.cacheGeneration === manifest?.generation);
+	const renderedEntries = [...stored.entries()].filter((entry): entry is [string, CachedWatchHistoryItem] => isCachedWatchHistoryItem(entry[1]));
 
 	if (manifest && renderedEntries.length > 0) {
 		console.log(`[cache] watch-history hit: ${renderedEntries.length} cached items`);
@@ -736,20 +738,41 @@ export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
 
 	try {
 		const freshRows = await fetchWatchHistoryRawRows(client, sinceSqlDate);
+		const newRows = freshRows.filter((row) => !rawRowsById.has(row.cacheId));
+
 		await Promise.all(
-			freshRows.map(async (row) => {
+			newRows.map(async (row) => {
 				rawRowsById.set(row.cacheId, row);
 				await diskSet(REPORT_WATCH_HISTORY, row.cacheId, row);
 			}),
 		);
 
-		const results = await renderWatchHistoryItems(client, mergeWatchHistoryRows([...rawRowsById.values()]));
-		const generation = new Date().toISOString();
-		const oldRenderedKeys = [...stored.entries()].filter(([, value]) => isCachedWatchHistoryItem(value)).map(([key]) => key);
+		const sessions = mergeWatchHistoryRows([...rawRowsById.values()]);
+		const sessionKeys = new Set(sessions.map(watchHistorySessionCacheKey));
+		const renderedByKey = new Map(renderedEntries);
+		const cachedResults: WatchHistoryItem[] = [];
+		const sessionsToRender: MergedWatchHistorySession[] = [];
 
-		await Promise.all(oldRenderedKeys.map((key) => diskDelete(REPORT_WATCH_HISTORY, key)));
+		for (const session of sessions) {
+			const cacheId = watchHistorySessionCacheKey(session);
+			const cachedItem = renderedByKey.get(cacheId);
+			if (cachedItem) {
+				cachedResults.push(toWatchHistoryItem(cachedItem));
+			} else {
+				sessionsToRender.push(session);
+			}
+		}
+
 		await Promise.all(
-			results.map(async (item) => {
+			renderedEntries
+				.filter(([key]) => !sessionKeys.has(key))
+				.map(([key]) => diskDelete(REPORT_WATCH_HISTORY, key)),
+		);
+
+		const renderedFresh = sessionsToRender.length > 0 ? await renderWatchHistoryItems(client, sessionsToRender) : [];
+		const generation = new Date().toISOString();
+		await Promise.all(
+			renderedFresh.map(async (item) => {
 				const cacheId = watchHistoryItemCacheKey(item);
 				const cachedItem: CachedWatchHistoryItem = { ...item, cacheId, cacheGeneration: generation };
 				await diskSet(REPORT_WATCH_HISTORY, cacheId, cachedItem);
@@ -761,7 +784,8 @@ export async function getWatchHistory(): Promise<WatchHistoryItem[]> {
 			generation,
 		});
 
-		console.log(`[cache] watch-history refreshed ${freshRows.length} rows; ${results.length} rendered items`);
+		const results = [...cachedResults, ...renderedFresh].sort((a, b) => b.playbackStartDate.localeCompare(a.playbackStartDate));
+		console.log(`[cache] watch-history refreshed ${newRows.length} new rows; rendered ${renderedFresh.length} new/changed items; ${cachedResults.length} item hits`);
 		return results;
 	} catch (err) {
 		const cachedItems = renderedEntries.map(([, item]) => toWatchHistoryItem(item));
