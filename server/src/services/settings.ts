@@ -10,7 +10,12 @@ export interface AppSettings {
 	discordGuildId: string;
 	discordIntroMessage: string;
 	discordIntroMessageId: string;
+	discordKeepVoteEmoji: string;
+	discordRemoveVoteEmoji: string;
 }
+
+export const DEFAULT_DISCORD_KEEP_VOTE_EMOJI = '\u{1F44E}';
+export const DEFAULT_DISCORD_REMOVE_VOTE_EMOJI = '\u{1F44D}';
 
 export const DEFAULT_DISCORD_INTRO_MESSAGE = [
 	'**Jellyfin removal voting**',
@@ -20,7 +25,7 @@ export const DEFAULT_DISCORD_INTRO_MESSAGE = [
 	'How it works:',
 	'- Each notice names the item, requester, last watcher, and scheduled removal date.',
 	'- Vote with thumbs up to keep the item.',
-	'- Vote with thumbs down if it is okay to delete the item.',
+	'- Vote with thumbs down if it is okay to remove the item.',
 	'- Items are reviewed after the scheduled date before they are marked removed.',
 ].join('\n');
 
@@ -33,6 +38,8 @@ const DEFAULTS: AppSettings = {
 	discordGuildId: '',
 	discordIntroMessage: DEFAULT_DISCORD_INTRO_MESSAGE,
 	discordIntroMessageId: '',
+	discordKeepVoteEmoji: DEFAULT_DISCORD_KEEP_VOTE_EMOJI,
+	discordRemoveVoteEmoji: DEFAULT_DISCORD_REMOVE_VOTE_EMOJI,
 };
 const SETTINGS_FILE = path.join(__dirname, '../../data/settings.json');
 

@@ -71,6 +71,8 @@ export interface AppSettings {
 	discordGuildId: string;
 	discordIntroMessage: string;
 	discordIntroMessageId: string;
+	discordKeepVoteEmoji: string;
+	discordRemoveVoteEmoji: string;
 }
 
 export async function fetchSettings(): Promise<AppSettings> {

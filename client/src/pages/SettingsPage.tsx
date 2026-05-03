@@ -17,6 +17,7 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  Autocomplete,
   useTheme,
   useMediaQuery,
 } from '@mui/material';
@@ -45,7 +46,81 @@ interface ReportStat {
   newestCachedAt: string | null;
 }
 
+interface EmojiOption {
+  emoji: string;
+  label: string;
+  keywords: string;
+}
+
 const api = axios.create({ baseURL: '/api' });
+
+const VOTE_EMOJI_OPTIONS: EmojiOption[] = [
+  { emoji: '👍', label: 'Thumbs Up', keywords: 'approve agree yes remove delete ok' },
+  { emoji: '👎', label: 'Thumbs Down', keywords: 'reject disagree no keep' },
+  { emoji: '✅', label: 'Check Mark', keywords: 'approve yes ok done keep' },
+  { emoji: '❌', label: 'Cross Mark', keywords: 'reject no remove delete' },
+  { emoji: '🗑️', label: 'Trash', keywords: 'remove delete bin garbage' },
+  { emoji: '🚫', label: 'No Entry', keywords: 'block no reject remove' },
+  { emoji: '👌', label: 'OK Hand', keywords: 'ok approve agree' },
+  { emoji: '🙌', label: 'Raised Hands', keywords: 'approve celebrate agree keep' },
+  { emoji: '👏', label: 'Clap', keywords: 'approve agree' },
+  { emoji: '🤷', label: 'Shrug', keywords: 'unsure neutral abstain' },
+  { emoji: '❤️', label: 'Heart', keywords: 'love favorite keep' },
+  { emoji: '⭐', label: 'Star', keywords: 'favorite keep good' },
+  { emoji: '🔥', label: 'Fire', keywords: 'hot good favorite keep' },
+  { emoji: '💀', label: 'Skull', keywords: 'dead remove delete' },
+  { emoji: '👀', label: 'Eyes', keywords: 'watch review look' },
+];
+
+function getEmojiOption(value: string): EmojiOption | null {
+  return VOTE_EMOJI_OPTIONS.find((option) => option.emoji === value.trim()) ?? null;
+}
+
+function getEmojiValue(value: string | EmojiOption | null): string {
+  if (!value) return '';
+  return typeof value === 'string' ? value : value.emoji;
+}
+
+function VoteEmojiAutocomplete({
+  label,
+  value,
+  helperText,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  helperText: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <Autocomplete<EmojiOption, false, false, true>
+      freeSolo
+      options={VOTE_EMOJI_OPTIONS}
+      value={getEmojiOption(value) ?? value}
+      getOptionLabel={(option) => (typeof option === 'string' ? option : `${option.emoji} ${option.label}`)}
+      filterOptions={(options, state) => {
+        const input = state.inputValue.trim().toLowerCase();
+        if (!input) return options;
+        return options.filter((option) => `${option.emoji} ${option.label} ${option.keywords}`.toLowerCase().includes(input));
+      }}
+      onChange={(_event, nextValue) => onChange(getEmojiValue(nextValue))}
+      onInputChange={(_event, nextInput, reason) => {
+        if (reason === 'input') onChange(nextInput);
+      }}
+      renderOption={(props, option) => (
+        <Box component="li" {...props} sx={{ gap: 1 }}>
+          <Typography component="span" sx={{ width: 28, fontSize: 20, lineHeight: 1 }}>
+            {option.emoji}
+          </Typography>
+          <Typography component="span" variant="body2">
+            {option.label}
+          </Typography>
+        </Box>
+      )}
+      renderInput={(params) => <TextField {...params} label={label} helperText={helperText} />}
+    />
+  );
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -85,6 +160,8 @@ export default function SettingsPage({ onSnackbar }: Props) {
   const [localDiscordChannelId, setLocalDiscordChannelId] = React.useState('');
   const [discordChannelName, setDiscordChannelName] = React.useState('');
   const [localDiscordIntroMessage, setLocalDiscordIntroMessage] = React.useState('');
+  const [localDiscordKeepVoteEmoji, setLocalDiscordKeepVoteEmoji] = React.useState('');
+  const [localDiscordRemoveVoteEmoji, setLocalDiscordRemoveVoteEmoji] = React.useState('');
   const [discordError, setDiscordError] = React.useState<string | null>(null);
   const [savingDiscord, setSavingDiscord] = React.useState(false);
   const [sendingIntro, setSendingIntro] = React.useState(false);
@@ -106,6 +183,8 @@ export default function SettingsPage({ onSnackbar }: Props) {
       setLocalDiscordChannelId(s.discordChannelId);
       setDiscordChannelName(s.discordChannelName);
       setLocalDiscordIntroMessage(s.discordIntroMessage);
+      setLocalDiscordKeepVoteEmoji(s.discordKeepVoteEmoji);
+      setLocalDiscordRemoveVoteEmoji(s.discordRemoveVoteEmoji);
       setDiscordError(null);
     } finally {
       setLoadingSettings(false);
@@ -163,12 +242,16 @@ export default function SettingsPage({ onSnackbar }: Props) {
         discordBotToken: localDiscordBotToken,
         discordChannelId: localDiscordChannelId,
         discordIntroMessage: localDiscordIntroMessage,
+        discordKeepVoteEmoji: localDiscordKeepVoteEmoji,
+        discordRemoveVoteEmoji: localDiscordRemoveVoteEmoji,
       });
       setSettings(updated);
       setLocalDiscordBotToken(updated.discordBotToken);
       setLocalDiscordChannelId(updated.discordChannelId);
       setDiscordChannelName(updated.discordChannelName);
       setLocalDiscordIntroMessage(updated.discordIntroMessage);
+      setLocalDiscordKeepVoteEmoji(updated.discordKeepVoteEmoji);
+      setLocalDiscordRemoveVoteEmoji(updated.discordRemoveVoteEmoji);
       onSnackbar(updated.discordChannelId ? `Discord channel verified: #${updated.discordChannelName}` : 'Discord settings cleared', 'success');
     } catch (err: unknown) {
       const axiosError = err as { response?: { data?: { error?: string } } };
@@ -226,7 +309,9 @@ export default function SettingsPage({ onSnackbar }: Props) {
     settings !== null &&
     (localDiscordBotToken !== settings.discordBotToken ||
       localDiscordChannelId !== settings.discordChannelId ||
-      localDiscordIntroMessage !== settings.discordIntroMessage);
+      localDiscordIntroMessage !== settings.discordIntroMessage ||
+      localDiscordKeepVoteEmoji !== settings.discordKeepVoteEmoji ||
+      localDiscordRemoveVoteEmoji !== settings.discordRemoveVoteEmoji);
   const canSendIntro = !!settings?.discordBotToken && !!settings.discordChannelId && localDiscordIntroMessage.trim().length > 0;
   const ttlLabel = localTtl === 0 ? 'Never expires' : `${localTtl} hour${localTtl !== 1 ? 's' : ''}`;
   const discordHelperText = discordError
@@ -313,6 +398,24 @@ export default function SettingsPage({ onSnackbar }: Props) {
                     helperText={discordHelperText}
                     error={!!discordError}
                   />
+                  <Stack direction={isMobile ? 'column' : 'row'} spacing={2}>
+                    <Box sx={{ flex: 1 }}>
+                      <VoteEmojiAutocomplete
+                        label="Keep Vote Emoji"
+                        value={localDiscordKeepVoteEmoji}
+                        onChange={setLocalDiscordKeepVoteEmoji}
+                        helperText="Reaction added for keep votes"
+                      />
+                    </Box>
+                    <Box sx={{ flex: 1 }}>
+                      <VoteEmojiAutocomplete
+                        label="Remove Vote Emoji"
+                        value={localDiscordRemoveVoteEmoji}
+                        onChange={setLocalDiscordRemoveVoteEmoji}
+                        helperText="Reaction added for remove votes"
+                      />
+                    </Box>
+                  </Stack>
                   <TextField
                     fullWidth
                     multiline
